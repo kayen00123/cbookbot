@@ -1,0 +1,79 @@
+{
+  "tweets": [
+    {
+      "id": 1,
+      "text": "🚀 Trade on our DEX for the best rates! Low fees, fast transactions, and top liquidity. Start trading today! #DeFi #Crypto",
+      "category": "promotion"
+    },
+    {
+      "id": 2,
+      "text": "🔒 Security is our top priority. Our protocol is audited and continuously monitored to keep your funds safe. #Security #DeFi",
+      "category": "security"
+    },
+    {
+      "id": 3,
+      "text": "💎 Did you know? Our DEX offers instant swap with zero slippage for stablecoin pairs! Try it now. #Trading #Crypto",
+      "category": "feature"
+    },
+    {
+      "id": 4,
+      "text": "📈 Market update: Check out the latest token prices on our platform. Real-time data, always accurate. #CryptoPrices #DeFi",
+      "category": "update"
+    },
+    {
+      "id": 5,
+      "text": "🎁 Don't forget to check our rewards program! Earn tokens while you trade. More trading = more rewards! #YieldFarming #DeFi",
+      "category": "promotion"
+    },
+    {
+      "id": 6,
+      "text": "🌐 Join our community! Connect with fellow traders, get support, and stay updated on new features. Link in bio! #Community #DeFi",
+      "category": "community"
+    },
+    {
+      "id": 7,
+      "text": "⚡ Lightning fast swaps! Experience near-instant transaction finality on our high-performance DEX. #Speed #DeFi",
+      "category": "feature"
+    },
+    {
+      "id": 8,
+      "text": "📊 Volume update: Our protocol has processed over $100M in trading volume this month! Thank you for your support! #Milestone #DeFi",
+      "category": "milestone"
+    },
+    {
+      "id": 9,
+      "text": "🔥 Hot token alert: Check out the newest listings on our DEX. Great opportunities await! #NewListing #Crypto",
+      "category": "alert"
+    },
+    {
+      "id": 10,
+      "text": "💰 Low fees matter! Trade on our DEX and keep more of your profits. Starting at just 0.1% per trade. #LowFees #DeFi",
+      "category": "feature"
+    },
+    {
+      "id": 11,
+      "text": "🔔 Reminder: Always double-check the token address before trading. Stay vigilant against scams! #Security #ScamAlert",
+      "category": "security"
+    },
+    {
+      "id": 12,
+      "text": "🌙 Night owl trader? Our DEX never sleeps! Trade anytime, anywhere, 24/7/365. #24_7 #AlwaysOn #DeFi",
+      "category": "feature"
+    },
+    {
+      "id": 13,
+      "text": "🤝 We're excited to announce a new partnership! Stay tuned for collaborative announcements. #Partnership #DeFi",
+      "category": "announcement"
+    },
+    {
+      "id": 14,
+      "text": "📱 Mobile trading is here! Access our DEX from your phone. Trade on the go with our mobile-friendly interface. #MobileTrading #DeFi",
+      "category": "feature"
+    },
+    {
+      "id": 15,
+      "text": "💡 Pro tip: Use limit orders to buy tokens at your desired price. Set it and forget it! #TradingTips #DeFi",
+      "category": "tip"
+    }
+  ]
+}
