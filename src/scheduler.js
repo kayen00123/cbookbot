@@ -145,25 +145,13 @@ class Scheduler {
       
       logger.info('Checking for trending hashtags...');
       
-      // Memecoin-focused hashtags to target (recent posts with good engagement)
-      const trendingHashtags = [
-        '#memecoin', '#solana', '#bonk', '#dogwifhat', '#wif', '#pepe',
-        '#floki', '#shiba', '#dogecoin', '#catcoin', '#turbo', '#mog',
-        '#ai16z', '#goat', '#arc', '#virtuals', '#act', '#proc',
-        '#bnb', '#base', '#sol', '#eth'
-      ];
+      // Always target #memecoin - no random hashtags
+      const targetHashtag = '#memecoin';
       
-      // Find a trending hashtag
-      const trendingHashtag = this.findTrendingHashtag(trendingHashtags);
+      logger.info(`Targeting hashtag: ${targetHashtag}`);
       
-      if (trendingHashtag) {
-        logger.info(`Found trending hashtag: ${trendingHashtag}`);
-        
-        // Engage with the hashtag
-        await this.engageWithHashtag(trendingHashtag);
-      } else {
-        logger.debug('No trending hashtags found');
-      }
+      // Engage with memecoin hashtag
+      await this.engageWithHashtag(targetHashtag);
     } catch (error) {
       logger.error('Failed to engage with trending hashtags', { error: error.message });
     }
