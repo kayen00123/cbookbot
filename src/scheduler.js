@@ -3,6 +3,7 @@ const config = require('./config');
 const logger = require('./logger');
 const twitterClient = require('./twitterClient');
 const tweetQueue = require('./tweetQueue');
+const aiClient = require('./aiClient');
 
 class Scheduler {
   constructor() {
@@ -24,6 +25,10 @@ class Scheduler {
     }
 
     logger.info('Starting tweet scheduler...');
+    
+    // Initialize AI Client
+    aiClient.initialize();
+    
     this.scheduleJobs();
     this.isRunning = true;
     
@@ -83,7 +88,7 @@ class Scheduler {
   async executeScheduledTweet() {
     logger.info('Executing scheduled tweet...');
     
-    // Get next tweet from queue
+    // Get topic from tweet queue
     const tweet = tweetQueue.getNextTweet();
     
     if (!tweet) {
@@ -91,21 +96,41 @@ class Scheduler {
       return;
     }
 
-    logger.info('Posting scheduled tweet', {
+    // Generate AI thread
+    logger.info('Generating AI thread for topic', {
       id: tweet.id,
       category: tweet.category
     });
 
-    // Post to Twitter
-    const result = await twitterClient.tweet(tweet.text);
+    // Generate thread using AI
+    const threadTweets = await aiClient.generateTweetThread(tweet.text, 3);
     
-    if (result) {
-      logger.success('Scheduled tweet posted successfully', {
-        tweetId: result.data.id,
-        category: tweet.category
-      });
+    if (threadTweets && threadTweets.length > 0) {
+      logger.info(`Generated ${threadTweets.length} tweets for thread`);
+      
+      // Post the thread
+      const result = await twitterClient.postThread(threadTweets);
+      
+      if (result) {
+        logger.success('AI thread posted successfully', {
+          category: tweet.category,
+          tweetCount: threadTweets.length
+        });
+      } else {
+        logger.error('Failed to post AI thread');
+      }
     } else {
-      logger.error('Failed to post scheduled tweet');
+      // Fallback to single tweet if AI fails
+      logger.warn('AI generation failed, posting single tweet');
+      const result = await twitterClient.tweet(tweet.text);
+      
+      if (result) {
+        logger.success('Scheduled tweet posted successfully', {
+          category: tweet.category
+        });
+      } else {
+        logger.error('Failed to post scheduled tweet');
+      }
     }
   }
 
@@ -120,10 +145,12 @@ class Scheduler {
       
       logger.info('Checking for trending hashtags...');
       
-      // Trending crypto hashtags to monitor
+      // Memecoin-focused hashtags to target (recent posts with good engagement)
       const trendingHashtags = [
-        '#Bitcoin', '#Ethereum', '#DeFi', '#Crypto', '#BSC',
-        '#Base', '#NFT', '#Web3', '#Altcoins', '#Blockchain'
+        '#memecoin', '#solana', '#bonk', '#dogwifhat', '#wif', '#pepe',
+        '#floki', '#shiba', '#dogecoin', '#catcoin', '#turbo', '#mog',
+        '#ai16z', '#goat', '#arc', '#virtuals', '#act', '#proc',
+        '#bnb', '#base', '#sol', '#eth'
       ];
       
       // Find a trending hashtag
@@ -159,8 +186,8 @@ class Scheduler {
       if (tweet) {
         logger.info(`Found tweet to engage with: ${tweet.text.substring(0, 50)}...`);
         
-        // Post a comment
-        const comment = this.generateComment(hashtag);
+        // Generate comment (async)
+        const comment = await this.generateComment(hashtag);
         await this.postComment(tweet.id, comment);
         
         // Update last engagement time
@@ -181,9 +208,47 @@ class Scheduler {
       const tweets = await twitterClient.searchTweets(hashtag);
       
       if (tweets.length > 0) {
-        // Return a random tweet from the results
-        const randomIndex = Math.floor(Math.random() * tweets.length);
-        return tweets[randomIndex];
+        // Filter for good engagement (at least 10 likes+retweets) and within 24 hours
+        const now = Date.now();
+        const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
+        
+        // Score and filter tweets
+        const scoredTweets = tweets.filter(tweet => {
+          // Calculate total engagement
+          const totalEngagement = (tweet.likes || 0) + (tweet.retweets || 0) + (tweet.replies || 0);
+          
+          // Check if it's a memecoin-related post
+          const text = (tweet.text || '').toLowerCase();
+          const isMemecoin = text.includes('memecoin') || 
+                             text.includes('#memecoin') ||
+                             text.includes('meme coin') ||
+                             text.includes(hashtag.toLowerCase().replace('#', ''));
+          
+          // Check timestamp if available
+          let isRecent = true;
+          if (tweet.timestamp) {
+            const tweetTime = new Date(tweet.timestamp).getTime();
+            isRecent = tweetTime > twentyFourHoursAgo;
+          }
+          
+          // Must have decent engagement OR be a direct hashtag match with some engagement
+          const hasGoodEngagement = totalEngagement >= 10 || (isMemecoin && totalEngagement >= 5);
+          
+          return isRecent && hasGoodEngagement && (isMemecoin || totalEngagement >= 20);
+        });
+        
+        // Sort by engagement score (highest first)
+        scoredTweets.sort((a, b) => {
+          const engA = (a.likes || 0) + (a.retweets || 0) + (a.replies || 0);
+          const engB = (b.likes || 0) + (b.retweets || 0) + (b.replies || 0);
+          return engB - engA;
+        });
+        
+        if (scoredTweets.length > 0) {
+          logger.info(`Found ${scoredTweets.length} relevant memecoin tweets with good engagement`);
+          // Return the top engagement tweet
+          return scoredTweets[0];
+        }
       }
       
       return null;
@@ -194,12 +259,15 @@ class Scheduler {
   }
 
   generateComment(hashtag) {
+    // Memecoin-focused comments for Cookbook DEX
     const comments = [
-      `Check out Cookbook DEX for trading ${hashtag} tokens! 🚀 #DeFi #Crypto`,
-      `Trade ${hashtag} on Cookbook DEX today! #Crypto #DeFi`,
-      `Cookbook DEX is perfect for ${hashtag} trading! #Blockchain #Crypto`,
-      `Don't miss ${hashtag} on Cookbook DEX! #Altcoins #DeFi`,
-      `${hashtag} is hot! Trade it on Cookbook DEX now! #Crypto #BSC`
+      `Great post! 🚀 Trade your memecoins on Cookbook DEX - lowest fees on BNB Chain & Base!`,
+      `Thanks for sharing! Swap memecoins on Cookbook DEX - super low fees!`,
+      `Nice take! 🔥 Trade memecoins on Cookbook DEX for the best rates!`,
+      `Interesting! Don't miss out - trade memecoins on Cookbook DEX now!`,
+      `Hot take! 💎 Trade your memecoins on Cookbook DEX - minimal slippage!`,
+      `Great insight! Check out Cookbook DEX for trading memecoins with low fees!`,
+      `That's the spirit! Trade memecoins on Cookbook DEX - fast & cheap!`
     ];
     
     return comments[Math.floor(Math.random() * comments.length)];
@@ -246,8 +314,8 @@ class Scheduler {
         if (tweet) {
           logger.info(`Found latest tweet from @${account}: ${tweet.text.substring(0, 50)}...`);
           
-          // Generate comment
-          const comment = this.generateAccountComment(account);
+          // Generate comment (async)
+          const comment = await this.generateAccountComment(account);
           
           // Post comment
           const result = await this.postComment(tweet.id, comment);
@@ -315,13 +383,13 @@ class Scheduler {
   }
 
   generateAccountComment(account) {
-    // Generate a comment that mentions the account
+    // Manual predefined comments (no AI needed)
     const comments = [
-      `Thanks for the update! Check out Cookbook DEX for the best trading experience! 🚀 #DeFi #Crypto`,
-      `Great post! Trade on Cookbook DEX today! #Crypto #DeFi`,
-      `Cookbook DEX is the best place to trade! #Blockchain #Crypto`,
-      `Don't miss out! Trade on Cookbook DEX now! #Altcoins #DeFi`,
-      `Hot tips! Trade on Cookbook DEX for the best rates! #Crypto #BSC`
+      `Thanks for the update! Check out Cookbook DEX - best trading experience! 🚀`,
+      `Great post! Trade on Cookbook DEX today!`,
+      `Cookbook DEX is the best place to trade!`,
+      `Don't miss out! Trade on Cookbook DEX now!`,
+      `Hot tips! Trade on Cookbook DEX for the best rates!`
     ];
     
     return comments[Math.floor(Math.random() * comments.length)];

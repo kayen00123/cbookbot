@@ -3,6 +3,29 @@ const config = require('./config');
 const twitterClient = require('./twitterClient');
 const tweetQueue = require('./tweetQueue');
 const scheduler = require('./scheduler');
+const aiClient = require('./aiClient');
+const fs = require('fs');
+const path = require('path');
+
+// Helper to save base64 image
+function downloadBase64Image(base64Data, filename) {
+  return new Promise((resolve) => {
+    try {
+      const base64Image = base64Data.replace(/^data:image\/\w+;base64,/, '');
+      const imageBuffer = Buffer.from(base64Image, 'base64');
+      const filepath = path.join(__dirname, '..', 'temp_images', filename);
+      const dir = path.join(__dirname, '..', 'temp_images');
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(filepath, imageBuffer);
+      resolve(filepath);
+    } catch (error) {
+      logger.error('Failed to save image', { error: error.message });
+      resolve(null);
+    }
+  });
+}
 
 class TwitterBot {
   constructor() {
@@ -30,8 +53,32 @@ class TwitterBot {
     const stats = tweetQueue.getStats();
     logger.info('Tweet queue stats', stats);
 
-    // Skip test tweet - bot is verified by manual login
-    logger.info('Skipping test tweet - manual login verified');
+    // Initialize AI Client
+    await aiClient.initialize();
+    
+    // Generate and post test AI thread (3 tweets)
+    logger.info('Generating test AI thread with OpenRouter...');
+    const testTopic = 'Cookbook DEX - Trade trending tokens on BNB Chain and Base with low fees';
+    const threadTweets = await aiClient.generateTweetThread(testTopic, 3);
+    
+    if (threadTweets && threadTweets.length > 0) {
+      logger.info(`Generated ${threadTweets.length} tweets for test thread`);
+      for (let i = 0; i < threadTweets.length; i++) {
+        logger.info(`Test Tweet ${i + 1}: ${threadTweets[i].substring(0, 80)}...`);
+      }
+      
+      logger.info('Posting test thread...');
+      
+      const result = await twitterClient.postThread(threadTweets);
+      
+      if (result) {
+        logger.success('Test AI thread posted successfully!');
+      } else {
+        logger.error('Failed to post test thread');
+      }
+    } else {
+      logger.warn('Could not generate test thread, skipping...');
+    }
 
     // Start the scheduler
     scheduler.start();
