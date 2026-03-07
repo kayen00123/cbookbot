@@ -43,17 +43,26 @@ class TwitterClient {
       // Check if cookies exist
       const hasCookies = fs.existsSync(this.cookiesPath);
       
-      // Launch Chrome
-      this.browser = await puppeteer.launch({
-        headless: false,
-        executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      // Detect if running on Linux (fly.io) or Windows
+      const isLinux = process.platform === 'linux';
+      
+      // Launch Chrome - use bundled Chromium for cross-platform
+      const launchOptions = {
+        headless: isLinux ? true : false,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-blink-features=AutomationControlled'
         ]
-      });
+      };
+      
+      // On Windows, use system Chrome if available
+      if (!isLinux && fs.existsSync('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe')) {
+        launchOptions.executablePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+      }
+      
+      this.browser = await puppeteer.launch(launchOptions);
 
       this.page = await this.browser.newPage();
       
