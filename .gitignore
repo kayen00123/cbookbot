@@ -4,8 +4,24 @@
 # Twitter session cookies (contains your login session)
 twitter_cookies.json
 
-# Chrome user data
-user-data/
+# Chrome user data - ignore browser cache folders but keep custom json files
+user-data/*/
+user-data/*.dat
+user-data/*.log
+user-data/*_journal
+user-data/* Cache/
+user-data/*_cache/
+user-data/Default/Cache/
+user-data/Default/*_cache/
+user-data/Default/Code\ Cache/
+user-data/Default/IndexedDB/
+user-data/Default/Local\ Storage/
+user-data/Default/Network/
+user-data/Default/Session\ Storage/
+user-data/Default/Sessions/
+!user-data/prompts.json
+!user-data/commented_tweets.json
+!user-data/posted_content.json
 
 # Node modules
 node_modules/
