@@ -324,18 +324,18 @@ class Scheduler {
   }
 
   generateComment(hashtag) {
-    // Memecoin-focused comments for Cookbook DEX
-    const comments = [
-      `Great post! 🚀 Trade your memecoins on Cookbook DEX - lowest fees on BNB Chain & Base!`,
-      `Thanks for sharing! Swap memecoins on Cookbook DEX - super low fees!`,
-      `Nice take! 🔥 Trade memecoins on Cookbook DEX for the best rates!`,
-      `Interesting! Don't miss out - trade memecoins on Cookbook DEX now!`,
-      `Hot take! 💎 Trade your memecoins on Cookbook DEX - minimal slippage!`,
-      `Great insight! Check out Cookbook DEX for trading memecoins with low fees!`,
-      `That's the spirit! Trade memecoins on Cookbook DEX - fast & cheap!`
-    ];
+    // Cookbook DEX promotion comment
+    const comment = `Introducing cookbook dex,
+
+For Traders
+✨ Earn reward points just for trading
+⚡ Access and trade new tokens instantly at launch on a high performance orderbook.
+📊 Trade across thousands of pairs freely
+
+For Token Owners
+🚀 List tokens instantly — zero listing fees.`;
     
-    return comments[Math.floor(Math.random() * comments.length)];
+    return comment;
   }
 
   async postComment(tweetId, comment) {
@@ -473,16 +473,18 @@ class Scheduler {
   }
 
   generateAccountComment(account) {
-    // Manual predefined comments (no AI needed)
-    const comments = [
-      `Thanks for the update! Check out Cookbook DEX - best trading experience! 🚀`,
-      `Great post! Trade on Cookbook DEX today!`,
-      `Cookbook DEX is the best place to trade!`,
-      `Don't miss out! Trade on Cookbook DEX now!`,
-      `Hot tips! Trade on Cookbook DEX for the best rates!`
-    ];
+    // Cookbook DEX promotion comment
+    const comment = `Introducing cookbook dex,
+
+For Traders
+✨ Earn reward points just for trading
+⚡ Access and trade new tokens instantly at launch on a high performance orderbook.
+📊 Trade across thousands of pairs freely
+
+For Token Owners
+🚀 List tokens instantly — zero listing fees.`;
     
-    return comments[Math.floor(Math.random() * comments.length)];
+    return comment;
   }
 
   // Manual trigger for testing
