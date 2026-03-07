@@ -55,38 +55,8 @@ class TwitterBot {
 
     // Initialize AI Client
     await aiClient.initialize();
-    
-    // Generate and post test AI thread only if enabled (skip on fly.io production)
-    const skipTestThread = process.env.SKIP_TEST_THREAD === 'true';
-    
-    if (!skipTestThread) {
-      logger.info('Generating test AI thread with OpenRouter...');
-      const testTopic = 'Cookbook DEX - Trade trending tokens on BNB Chain and Base with low fees';
-      const threadTweets = await aiClient.generateTweetThread(testTopic, 3);
-      
-      if (threadTweets && threadTweets.length > 0) {
-        logger.info(`Generated ${threadTweets.length} tweets for test thread`);
-        for (let i = 0; i < threadTweets.length; i++) {
-          logger.info(`Test Tweet ${i + 1}: ${threadTweets[i].substring(0, 80)}...`);
-        }
-        
-        logger.info('Posting test thread...');
-        
-        const result = await twitterClient.postThread(threadTweets);
-        
-        if (result) {
-          logger.success('Test AI thread posted successfully!');
-        } else {
-          logger.error('Failed to post test thread');
-        }
-      } else {
-        logger.warn('Could not generate test thread, skipping...');
-      }
-    } else {
-      logger.info('Skipping test thread (SKIP_TEST_THREAD=true)');
-    }
 
-    // Start the scheduler
+    // Start the scheduler (will generate and post AI threads at scheduled times)
     scheduler.start();
 
     this.isRunning = true;

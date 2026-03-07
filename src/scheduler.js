@@ -4,13 +4,25 @@ const logger = require('./logger');
 const twitterClient = require('./twitterClient');
 const tweetQueue = require('./tweetQueue');
 const aiClient = require('./aiClient');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
 class Scheduler {
   constructor() {
     this.jobs = [];
     this.isRunning = false;
+    this.isExecutingTweet = false;
     this.lastEngagementTime = 0;
     this.engagementCooldown = 60 * 60 * 1000; // 1 hour cooldown
+
+    // Already-commented tweet IDs persistence
+    this.commentedStorePath = path.join(__dirname, '..', 'user-data', 'commented_tweets.json');
+    this.ensureCommentedStore();
+
+    // Already-posted content signatures persistence (to avoid duplicate tweets/threads)
+    this.postedStorePath = path.join(__dirname, '..', 'user-data', 'posted_content.json');
+    this.ensurePostedStore();
     
     // Accounts to monitor and comment on
     this.monitoredAccounts = ['cz_binance', 'BNBCHAIN', 'base'];
@@ -65,72 +77,119 @@ class Scheduler {
       }
     });
 
-    // Schedule trending hashtag engagement every 30 minutes
-    const trendingJob = schedule.scheduleJob('*/30 * * * *', () => this.engageWithTrendingHashtags());
-    if (trendingJob) {
-      this.jobs.push(trendingJob);
-      logger.info('Scheduled trending hashtag engagement job', { interval: 'every 30 minutes' });
+    // Schedule hashtag engagement at specific time (from HASHTAG_TIME env var)
+    if (config.bot.hashtagTime) {
+      const [hashtagHour, hashtagMinute] = config.bot.hashtagTime.split(':').map(Number);
+      const hashtagJob = schedule.scheduleJob(
+        { hour: hashtagHour, minute: hashtagMinute },
+        () => this.engageWithTrendingHashtags()
+      );
+      if (hashtagJob) {
+        this.jobs.push(hashtagJob);
+        logger.info('Scheduled hashtag engagement job', { time: config.bot.hashtagTime });
+      }
+    } else {
+      // Default: run every 30 minutes if no specific time set
+      const trendingJob = schedule.scheduleJob('*/30 * * * *', () => this.engageWithTrendingHashtags());
+      if (trendingJob) {
+        this.jobs.push(trendingJob);
+        logger.info('Scheduled trending hashtag engagement job', { interval: 'every 30 minutes' });
+      }
     }
 
-    // Schedule account monitoring twice a day (9 AM and 9 PM)
-    const accountJob1 = schedule.scheduleJob({ hour: 9, minute: 0 }, () => this.engageWithMonitoredAccounts());
-    const accountJob2 = schedule.scheduleJob({ hour: 21, minute: 0 }, () => this.engageWithMonitoredAccounts());
-    if (accountJob1) {
-      this.jobs.push(accountJob1);
-      logger.info('Scheduled account monitoring job', { time: '09:00' });
-    }
-    if (accountJob2) {
-      this.jobs.push(accountJob2);
-      logger.info('Scheduled account monitoring job', { time: '21:00' });
+    // Schedule account monitoring (from ACCOUNT_TIME env var)
+    if (config.bot.accountTime) {
+      const [accountHour, accountMinute] = config.bot.accountTime.split(':').map(Number);
+      const accountJob = schedule.scheduleJob(
+        { hour: accountHour, minute: accountMinute },
+        () => this.engageWithMonitoredAccounts()
+      );
+      if (accountJob) {
+        this.jobs.push(accountJob);
+        logger.info('Scheduled account monitoring job', { time: config.bot.accountTime });
+      }
+    } else {
+      // Default: run at 9 AM and 9 PM if no time set
+      const accountJob1 = schedule.scheduleJob({ hour: 9, minute: 0 }, () => this.engageWithMonitoredAccounts());
+      const accountJob2 = schedule.scheduleJob({ hour: 21, minute: 0 }, () => this.engageWithMonitoredAccounts());
+      if (accountJob1) {
+        this.jobs.push(accountJob1);
+        logger.info('Scheduled account monitoring job', { time: '09:00' });
+      }
+      if (accountJob2) {
+        this.jobs.push(accountJob2);
+        logger.info('Scheduled account monitoring job', { time: '21:00' });
+      }
     }
   }
 
   async executeScheduledTweet() {
-    logger.info('Executing scheduled tweet...');
-    
-    // Get topic from tweet queue
-    const tweet = tweetQueue.getNextTweet();
-    
-    if (!tweet) {
-      logger.error('No tweet available to post');
+    // Prevent concurrent executions
+    if (this.isExecutingTweet) {
+      logger.debug('Scheduled tweet already in progress, skipping...');
       return;
     }
-
-    // Generate AI thread
-    logger.info('Generating AI thread for topic', {
-      id: tweet.id,
-      category: tweet.category
-    });
-
-    // Generate thread using AI
-    const threadTweets = await aiClient.generateTweetThread(tweet.text, 3);
     
-    if (threadTweets && threadTweets.length > 0) {
-      logger.info(`Generated ${threadTweets.length} tweets for thread`);
-      
-      // Post the thread
-      const result = await twitterClient.postThread(threadTweets);
-      
-      if (result) {
-        logger.success('AI thread posted successfully', {
-          category: tweet.category,
-          tweetCount: threadTweets.length
-        });
-      } else {
-        logger.error('Failed to post AI thread');
+    this.isExecutingTweet = true;
+    
+    try {
+      logger.info('Executing scheduled tweet...');
+
+      // Load next prompt from rotation
+      const prompt = this.getNextPromptFromRotation();
+      logger.info('Generating AI thread for prompt:', prompt);
+
+      // Generate thread using AI with de-duplication of content
+      let threadTweets = await aiClient.generateTweetThread(prompt, 3);
+
+      // Attempt regeneration up to 3 times if content was posted before
+      let attempts = 0;
+      while (threadTweets && threadTweets.length > 0 && attempts < 3) {
+        const sig = this.getContentSignature(threadTweets);
+        if (!this.hasPostedSignature(sig)) break;
+        logger.warn('Generated thread matches a previously posted thread; regenerating...');
+        attempts++;
+        threadTweets = await aiClient.generateTweetThread(prompt, 3);
       }
-    } else {
-      // Fallback to single tweet if AI fails
-      logger.warn('AI generation failed, posting single tweet');
-      const result = await twitterClient.tweet(tweet.text);
       
-      if (result) {
-        logger.success('Scheduled tweet posted successfully', {
-          category: tweet.category
-        });
+      if (threadTweets && threadTweets.length > 0) {
+        logger.info(`Generated ${threadTweets.length} tweets for thread`);
+
+        // Final duplicate check before posting
+        const sig = this.getContentSignature(threadTweets);
+        if (this.hasPostedSignature(sig)) {
+          logger.warn('Thread content still duplicates a previous post after regeneration attempts; skipping this schedule');
+        } else {
+          // Post the thread
+          const result = await twitterClient.postThread(threadTweets);
+          
+          if (result) {
+            // Record signature to prevent duplicates
+            this.savePostedSignature(sig);
+            logger.success('AI thread posted successfully', { tweetCount: threadTweets.length });
+          } else {
+            logger.error('Failed to post AI thread');
+          }
+        }
       } else {
-        logger.error('Failed to post scheduled tweet');
+        // Fallback to single tweet if AI fails
+        logger.warn('AI generation failed, attempting single tweet');
+        const singleText = prompt;
+        const singleSig = this.getContentSignature(singleText);
+        if (this.hasPostedSignature(singleSig)) {
+          logger.warn('Single tweet content duplicates a previous post; skipping this schedule');
+        } else {
+          const result = await twitterClient.tweet(singleText);
+          if (result) {
+            this.savePostedSignature(singleSig);
+            logger.success('Scheduled tweet posted successfully');
+          } else {
+            logger.error('Failed to post scheduled tweet');
+          }
+        }
       }
+    } finally {
+      this.isExecutingTweet = false;
     }
   }
 
@@ -176,12 +235,15 @@ class Scheduler {
         
         // Generate comment (async)
         const comment = await this.generateComment(hashtag);
-        await this.postComment(tweet.id, comment);
-        
-        // Update last engagement time
-        this.lastEngagementTime = Date.now();
-        
-        logger.success(`Successfully engaged with ${hashtag}!`);
+        const result = await this.postComment(tweet.id, comment);
+
+        if (result) {
+          // Persist commented tweet id
+          this.saveCommentedTweetId(tweet.id);
+          // Update last engagement time
+          this.lastEngagementTime = Date.now();
+          logger.success(`Successfully engaged with ${hashtag}!`);
+        }
       } else {
         logger.debug('No relevant tweets found to engage with');
       }
@@ -195,34 +257,49 @@ class Scheduler {
       // Search for tweets with the hashtag
       const tweets = await twitterClient.searchTweets(hashtag);
       
+      logger.info(`Found ${tweets.length} total tweets to filter`);
+
+      // Load already-commented tweet IDs
+      const commented = this.loadCommentedTweetIds();
+      const commentedSet = new Set(commented);
+      
       if (tweets.length > 0) {
-        // Filter for good engagement (at least 10 likes+retweets) and within 24 hours
+        // Filter for tweets within the last month (30 days) and with good engagement
         const now = Date.now();
-        const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
+        const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000); // 30 days in milliseconds
         
         // Score and filter tweets
         const scoredTweets = tweets.filter(tweet => {
-          // Calculate total engagement
+          // Skip already-commented tweets
+          if (!tweet.id || commentedSet.has(tweet.id)) {
+            return false;
+          }
+
+          // Calculate total engagement (proxy for impressions)
           const totalEngagement = (tweet.likes || 0) + (tweet.retweets || 0) + (tweet.replies || 0);
-          
+
           // Check if it's a memecoin-related post
           const text = (tweet.text || '').toLowerCase();
-          const isMemecoin = text.includes('memecoin') || 
+          const isMemecoin = text.includes('memecoin') ||
                              text.includes('#memecoin') ||
                              text.includes('meme coin') ||
                              text.includes(hashtag.toLowerCase().replace('#', ''));
-          
-          // Check timestamp if available
+
+          // Check timestamp if available - allow tweets from last 30 days
           let isRecent = true;
           if (tweet.timestamp) {
             const tweetTime = new Date(tweet.timestamp).getTime();
-            isRecent = tweetTime > twentyFourHoursAgo;
+            isRecent = tweetTime > thirtyDaysAgo;
           }
-          
-          // Must have decent engagement OR be a direct hashtag match with some engagement
-          const hasGoodEngagement = totalEngagement >= 10 || (isMemecoin && totalEngagement >= 5);
-          
-          return isRecent && hasGoodEngagement && (isMemecoin || totalEngagement >= 20);
+
+          // Only engage if total engagement >= 100
+          const hasGoodEngagement = totalEngagement >= 100;
+
+          const passes = isRecent && hasGoodEngagement;
+
+          logger.info(`Tweet: id=${tweet.id}, engagement=${totalEngagement}, alreadyCommented=${commentedSet.has(tweet.id)}, isMemecoin=${isMemecoin}, isRecent=${isRecent}, passes=${passes}`);
+
+          return passes;
         });
         
         // Sort by engagement score (highest first)
@@ -311,6 +388,8 @@ class Scheduler {
           if (result) {
             // Update last comment time for this account
             this.accountCommentTimes[account] = now;
+            // Save the commented tweet ID (with account prefix to avoid duplicates across accounts)
+            this.saveCommentedTweetId(`${account}_${tweet.id}`);
             logger.success(`Successfully commented on @${account}'s tweet!`);
           }
         } else {
@@ -339,31 +418,54 @@ class Scheduler {
       await twitterClient.page.waitForSelector('[data-testid="tweet"]', { timeout: 10000 }).catch(() => {});
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      // Get the first tweet (latest)
-      const tweets = await twitterClient.page.$('[data-testid="tweet"]');
+      // Get multiple tweets and detect pinned/reposts from social context
+      const tweetsData = await twitterClient.page.evaluate(() => {
+        const tweetEls = Array.from(document.querySelectorAll('[data-testid="tweet"]')).slice(0, 12);
+        const results = [];
+        for (const tweet of tweetEls) {
+          const ctxEl = tweet.querySelector('[data-testid="socialContext"]');
+          const ctx = ctxEl ? (ctxEl.textContent || '').toLowerCase() : '';
+          const isPinned = /pinned/.test(ctx);
+          const isRepost = /(reposted|retweeted)/.test(ctx);
+          const isReply = /replying to/.test(ctx);
+
+          const textEl = tweet.querySelector('[data-testid="tweetText"]');
+          const text = textEl ? textEl.textContent : '';
+
+          const linkEl = tweet.querySelector('a[href*="/status/"]');
+          const link = linkEl ? linkEl.getAttribute('href') : '';
+
+          results.push({ text, link, isPinned, isRepost, isReply });
+        }
+        return results;
+      });
+
+      // Filter out pinned and repost tweets, pick the first valid original post
+      const validTweets = tweetsData.filter(t => !t.isPinned && !t.isRepost && t.text && t.link);
       
-      if (!tweets || tweets.length === 0) {
-        logger.warn(`No tweets found from @${account}`);
+      if (validTweets.length === 0) {
+        logger.warn(`No valid (non-pinned, non-retweet) tweets found from @${account}`);
         return null;
       }
       
-      const tweet = tweets[0];
-      const textElement = await tweet.$('[data-testid="tweetText"]');
-      const text = textElement ? await textElement.evaluate(el => el.textContent) : '';
+      // Get the first valid tweet
+      const tweetData = validTweets[0];
       
-      // Get tweet link
-      const linkElement = await tweet.$('a[href*="/status/"]');
-      const link = linkElement ? await linkElement.evaluate(el => el.getAttribute('href')) : '';
-      
-      if (text && link) {
-        return {
-          id: link.split('/').pop(),
-          text: text.substring(0, 100),
-          author: account
-        };
+      // Check if we've already commented on this tweet
+      const tweetId = tweetData.link.split('/').pop();
+      const commentedIds = this.loadCommentedTweetIds();
+      if (commentedIds.includes(`${account}_${tweetId}`)) {
+        logger.info(`Already commented on @${account}'s tweet ${tweetId}, skipping...`);
+        return null;
       }
       
-      return null;
+      logger.info(`Found valid tweet from @${account}: ${tweetData.text.substring(0, 50)}... (pinned=${tweetData.isPinned}, repost=${tweetData.isRepost})`);
+      
+      return {
+        id: tweetId,
+        text: tweetData.text.substring(0, 100),
+        author: account
+      };
     } catch (error) {
       logger.error(`Failed to get latest tweet from @${account}`, { error: error.message });
       return null;
@@ -399,7 +501,15 @@ class Scheduler {
       text = tweet.text;
     }
 
-    return await twitterClient.tweet(text);
+    const sig = this.getContentSignature(text);
+    if (this.hasPostedSignature(sig)) {
+      logger.warn('Manual tweet matches previously posted content; aborting to avoid duplicate');
+      return null;
+    }
+
+    const res = await twitterClient.tweet(text);
+    if (res) this.savePostedSignature(sig);
+    return res;
   }
 
   getScheduledJobs() {
@@ -437,6 +547,136 @@ class Scheduler {
       return true;
     }
     return false;
+  }
+// ===== Persistence: commented tweet IDs =====
+  ensureCommentedStore() {
+    try {
+      const dir = path.dirname(this.commentedStorePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      if (!fs.existsSync(this.commentedStorePath)) {
+        fs.writeFileSync(this.commentedStorePath, JSON.stringify({ tweetIds: [] }, null, 2));
+      }
+    } catch (e) {
+      logger.error('Failed to ensure commented store', { error: e.message });
+    }
+  }
+
+  loadCommentedTweetIds() {
+    try {
+      if (!fs.existsSync(this.commentedStorePath)) this.ensureCommentedStore();
+      const raw = fs.readFileSync(this.commentedStorePath, 'utf8');
+      const data = JSON.parse(raw);
+      return Array.isArray(data.tweetIds) ? data.tweetIds : [];
+    } catch (e) {
+      logger.warn('Failed to read commented store, recreating', { error: e.message });
+      this.ensureCommentedStore();
+      return [];
+    }
+  }
+
+  saveCommentedTweetId(id) {
+    if (!id) return;
+    try {
+      const list = this.loadCommentedTweetIds();
+      if (list.includes(id)) return;
+      list.unshift(id);
+      // Cap size to avoid unbounded growth
+      const capped = list.slice(0, 1000);
+      fs.writeFileSync(this.commentedStorePath, JSON.stringify({ tweetIds: capped }, null, 2));
+      logger.info('Recorded commented tweet ID', { id });
+    } catch (e) {
+      logger.error('Failed to save commented tweet ID', { error: e.message });
+    }
+  }
+// ===== Persistence: posted content signatures =====
+  ensurePostedStore() {
+    try {
+      const dir = path.dirname(this.postedStorePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      if (!fs.existsSync(this.postedStorePath)) {
+        fs.writeFileSync(this.postedStorePath, JSON.stringify({ signatures: [] }, null, 2));
+      }
+    } catch (e) {
+      logger.error('Failed to ensure posted store', { error: e.message });
+    }
+  }
+
+  loadPostedSignatures() {
+    try {
+      if (!fs.existsSync(this.postedStorePath)) this.ensurePostedStore();
+      const raw = fs.readFileSync(this.postedStorePath, 'utf8');
+      const data = JSON.parse(raw);
+      return Array.isArray(data.signatures) ? data.signatures : [];
+    } catch (e) {
+      logger.warn('Failed to read posted store, recreating', { error: e.message });
+      this.ensurePostedStore();
+      return [];
+    }
+  }
+
+  hasPostedSignature(sig) {
+    if (!sig) return false;
+    const list = this.loadPostedSignatures();
+    return list.includes(sig);
+  }
+
+  savePostedSignature(sig) {
+    if (!sig) return;
+    try {
+      const list = this.loadPostedSignatures();
+      if (list.includes(sig)) return;
+      list.unshift(sig);
+      const capped = list.slice(0, 2000);
+      fs.writeFileSync(this.postedStorePath, JSON.stringify({ signatures: capped }, null, 2));
+    } catch (e) {
+      logger.error('Failed to save posted signature', { error: e.message });
+    }
+  }
+
+  // Compute a stable signature for a single tweet or a thread (array of strings)
+  getContentSignature(content) {
+    let normalized;
+    if (Array.isArray(content)) {
+      normalized = content.map((t) => this.normalizeText(t)).join('\n---\n');
+    } else {
+      normalized = this.normalizeText(String(content || ''));
+    }
+    return crypto.createHash('sha256').update(normalized, 'utf8').digest('hex');
+  }
+
+  normalizeText(t) {
+    return String(t || '')
+      .toLowerCase()
+      .replace(/https?:\/\/\S+/g, '') // strip URLs
+      .replace(/[#@][\w_]+/g, '') // strip hashtags and mentions
+      .replace(/\s+/g, ' ') // collapse whitespace
+      .trim();
+  }
+// ===== Prompt rotation helpers =====
+  getNextPromptFromRotation() {
+    try {
+      const promptsPath = path.join(__dirname, '..', 'user-data', 'prompts.json');
+      const idxPath = path.join(__dirname, '..', 'user-data', 'prompt_index.json');
+
+      const promptsRaw = fs.readFileSync(promptsPath, 'utf8');
+      const prompts = JSON.parse(promptsRaw);
+      if (!Array.isArray(prompts) || prompts.length === 0) return 'Share an engaging thread about our DEX orderbook on BNB/Base.';
+
+      let idxData = { index: 0 };
+      if (fs.existsSync(idxPath)) {
+        try { idxData = JSON.parse(fs.readFileSync(idxPath, 'utf8')); } catch {}
+      }
+      const i = Number.isInteger(idxData.index) ? idxData.index : 0;
+      const prompt = prompts[i % prompts.length];
+
+      // advance index and persist
+      const next = (i + 1) % prompts.length;
+      fs.writeFileSync(idxPath, JSON.stringify({ index: next }, null, 2));
+      return prompt;
+    } catch (e) {
+      logger.warn('Prompt rotation failed, using fallback prompt', { error: e.message });
+      return 'Explain how our decentralized orderbook gives precise, no-slippage trades on BNB/Base.';
+    }
   }
 }
 

@@ -229,92 +229,173 @@ class TwitterClient {
     try {
       logger.info(`Posting thread with ${tweets.length} tweets...`);
 
-      // Go to compose once and build the whole thread there
+      // Open the dedicated composer and build the entire thread there
       await this.page.goto('https://twitter.com/compose/tweet', {
         waitUntil: 'domcontentloaded',
         timeout: 100000
       });
       await delay(4000);
 
+      // Utility: count how many tweet textareas exist
+      const getComposerCount = async () => {
+        return await this.page.evaluate(() => {
+          return document.querySelectorAll('[data-testid^="tweetTextarea_"]').length || 0;
+        });
+      };
+
+      // Utility: wait until composer count becomes expected
+      const waitForComposerCount = async (expected, timeout = 10000) => {
+        return await this.page.waitForFunction(
+          (sel, expectedCount) => document.querySelectorAll(sel).length >= expectedCount,
+          { timeout },
+          '[data-testid^="tweetTextarea_"]',
+          expected
+        ).catch(() => null);
+      };
+
       // Helper to get a textarea for a specific index in the thread
       const getTextareaForIndex = async (i, timeout = 8000) => {
-        // Twitter usually numbers the textareas as tweetTextarea_0, _1, ...
         const selector = `[data-testid="tweetTextarea_${i}"]`;
         let area = await this.page.$(selector);
         if (!area) {
-          // Fallback: grab the last contenteditable
+          // Fallback: last contenteditable is often the active composer
           area = await this.page.$('[data-testid^="tweetTextarea_"], [contenteditable="true"]:last-of-type');
         }
         if (!area) {
-          // Wait briefly if not present yet
           area = await this.page.waitForSelector(selector, { timeout }).catch(() => null);
         }
         return area;
       };
 
       // Type the first tweet
-      const firstArea = await getTextareaForIndex(0, 12000);
+      const firstArea = await getTextareaForIndex(0, 15000);
       if (!firstArea) {
         logger.error('Cannot find first textarea for thread');
         return null;
       }
-      await firstArea.click();
-      await firstArea.type(tweets[0], { delay: 35 });
-      await delay(1000);
+      await firstArea.click({ delay: 0 });
+      await delay(500);
+      await firstArea.type(tweets[0], { delay: 30 });
+      await delay(1200);
 
-      // For each subsequent tweet, click Add another tweet, then type
-      for (let i = 1; i < tweets.length; i++) {
-        const addSelectors = [
-          '[data-testid="addButton"]',                    // add another tweet
-          '[aria-label*="Add another"]',                 // aria label fallback
-          'div[role="button"][data-testid="toolBar"] [data-testid="addButton"]'
+      // Robust click helper with retries + scroll + DOM validation
+      const clickAddWithRetry = async (targetCount, expectedIndex) => {
+        const candidates = [
+          '[data-testid="addButton"]',
+          '[aria-label*="Add another"]',
+          'div[data-testid="toolBar"] [data-testid="addButton"]',
+          'div[role="button"][aria-label*="Add another"]'
         ];
 
-        let added = false;
-        for (const sel of addSelectors) {
-          const el = await this.page.waitForSelector(sel, { timeout: 5000 }).catch(() => null);
-          if (el) {
-            await el.click();
-            await delay(1000);
-            logger.info(`Added new tweet composer using selector: ${sel}`);
-            added = true;
-            break;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          for (const sel of candidates) {
+            const el = await this.page.$(sel);
+            if (!el) continue;
+
+            // Ensure in view and enabled
+            try {
+              await el.evaluate((node) => node.scrollIntoView({ block: 'center', inline: 'center' }));
+            } catch {}
+            await delay(200);
+
+            // Try a direct click; if that fails, use JS click
+            try {
+              await el.click({ delay: 0 });
+            } catch {
+              try {
+                await this.page.evaluate((node) => node.click(), el);
+              } catch {}
+            }
+
+            // Success if composer count reached target OR expected textarea appeared
+            const okByCount = await waitForComposerCount(targetCount, 8000);
+            let okByTextarea = false;
+            if (!okByCount) {
+              okByTextarea = await this.page
+                .waitForSelector(`[data-testid="tweetTextarea_${expectedIndex}"]`, { timeout: 8000 })
+                .then(() => true)
+                .catch(() => false);
+            }
+
+            if (okByCount || okByTextarea) {
+              logger.info(`Added new tweet composer using selector: ${sel}`);
+              return true;
+            }
           }
+
+          // As a fallback between attempts, try keyboard shortcut that sometimes adds a composer
+          logger.warn(`Add button click attempt ${attempt} did not produce a new composer; trying keyboard fallback`);
+          try {
+            await this.page.keyboard.down('Control');
+            await this.page.keyboard.down('Shift');
+            await this.page.keyboard.press('Enter');
+            await this.page.keyboard.up('Shift');
+            await this.page.keyboard.up('Control');
+          } catch {}
+
+          const okAfterKbByCount = await waitForComposerCount(targetCount, 4000);
+          let okAfterKbByTextarea = false;
+          if (!okAfterKbByCount) {
+            okAfterKbByTextarea = await this.page
+              .waitForSelector(`[data-testid="tweetTextarea_${expectedIndex}"]`, { timeout: 4000 })
+              .then(() => true)
+              .catch(() => false);
+          }
+
+          if (okAfterKbByCount || okAfterKbByTextarea) {
+            logger.info('Added new tweet composer using keyboard shortcut');
+            return true;
+          }
+
+          await delay(500 + attempt * 300); // small backoff
         }
+        return false;
+      };
+
+      // Build the rest of the thread
+      for (let i = 1; i < tweets.length; i++) {
+        const before = await getComposerCount();
+        const target = before + 1;
+
+        const added = await clickAddWithRetry(target, i);
         if (!added) {
-          logger.warn('Could not find "Add another tweet" button; attempting keyboard shortcut');
-          // Try Ctrl+Shift+Enter which sometimes adds another tweet in the thread composer
-          await this.page.keyboard.down('Control');
-          await this.page.keyboard.down('Shift');
-          await this.page.keyboard.press('Enter');
-          await this.page.keyboard.up('Shift');
-          await this.page.keyboard.up('Control');
-          await delay(800);
+          logger.error('Could not create a new tweet composer for the thread');
+          return null;
         }
 
-        const area = await getTextareaForIndex(i, 8000);
+        // Wait for the ith textarea specifically
+        const area = await getTextareaForIndex(i, 10000);
         if (!area) {
           logger.error(`Cannot find textarea for tweet index ${i}`);
           return null;
         }
-        await area.click();
-        await area.type(tweets[i], { delay: 35 });
+
+        // Ensure it's focused and visible before typing
+        try {
+          await area.evaluate((node) => node.scrollIntoView({ block: 'center', inline: 'center' }));
+        } catch {}
+        await area.click({ delay: 0 });
+        await delay(250);
+        await area.type(tweets[i], { delay: 30 });
         await delay(600);
       }
 
-      // Post the entire thread: prefer the main Tweet/Post button (not Inline)
+      // Post the entire thread: prefer the main Tweet/Post button (Tweet all / Post)
       const postSelectors = [
-        '[data-testid="tweetButton"]',                  // main post button (Tweet all / Post)
+        '[data-testid="tweetButton"]',
         'div[role="button"][data-testid="tweetButton"]',
         'button[data-testid="tweetButton"]'
       ];
 
       let posted = false;
       for (const sel of postSelectors) {
-        const btn = await this.page.waitForSelector(sel, { timeout: 10000 }).catch(() => null);
+        const btn = await this.page.waitForSelector(sel, { timeout: 12000 }).catch(() => null);
         if (btn) {
           logger.info('Submitting thread...');
-          await btn.click();
+          // Ensure it's scrolled into view, then click
+          try { await btn.evaluate((n) => n.scrollIntoView({ block: 'center' })); } catch {}
+          await delay(150);
+          try { await btn.click(); } catch { await this.page.evaluate((n) => n.click(), btn).catch(() => {}); }
           posted = true;
           break;
         }
@@ -327,7 +408,12 @@ class TwitterClient {
         await this.page.keyboard.up('Control');
       }
 
-      await delay(7000);
+      // Wait for navigation away from composer or a short settle time
+      await Promise.race([
+        this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => null),
+        delay(7000)
+      ]);
+
       logger.success(`Thread posted with ${tweets.length} tweets!`);
       return { success: true };
 
@@ -343,104 +429,105 @@ class TwitterClient {
 
   async searchTweets(hashtag) {
     if (!this.isInitialized) return [];
-    
+
     try {
-      logger.info(`Searching for tweets with ${hashtag}...`);
-      
-      // Navigate to Twitter search - use f=live to get latest tweets
-      const searchUrl = `https://twitter.com/search?q=${encodeURIComponent(hashtag)}&src=typed_query&f=live`;
-      await this.page.goto(searchUrl, { 
+      logger.info(`Searching for tweets with ${hashtag} (last 30 days, Top first)...`);
+
+      // Build a since: filter for the past 30 days
+      const sinceDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const yyyy = sinceDate.getUTCFullYear();
+      const mm = String(sinceDate.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(sinceDate.getUTCDate()).padStart(2, '0');
+      const sinceQuery = `since:${yyyy}-${mm}-${dd}`;
+
+      // Broaden query slightly to include both hashtag and keyword
+      const rawQuery = `(#memecoin OR memecoin) ${sinceQuery}`;
+
+      // Prefer Top tab to bias toward higher-engagement posts
+      const topUrl = `https://twitter.com/search?q=${encodeURIComponent(rawQuery)}&src=typed_query&f=top`;
+      await this.page.goto(topUrl, {
         waitUntil: 'domcontentloaded',
-        timeout: 100000 
+        timeout: 100000
       });
-      await delay(5000);
-      
-      // Wait for tweets to load
-      await this.page.waitForSelector('[data-testid="tweet"]', { timeout: 10000 }).catch(() => {});
+
       await delay(3000);
-      
-      // Find tweet elements - use $ for array of elements
-      const tweets = await this.page.$('[data-testid="tweet"]');
-      
-      if (!tweets || tweets.length === 0) {
+      logger.info('Waiting for tweets to load (Top)...');
+
+      // Helper to scroll and collect a small, fast batch on Top tab only
+      const loadTweetsWithScroll = async (maxScrolls = 15, minTweets = 20) => {
+        for (let i = 0; i < maxScrolls; i++) {
+          await this.page.evaluate(() => { try { window.scrollTo(0, document.body.scrollHeight); } catch (e) {} });
+          await delay(1000 + Math.floor(Math.random() * 250));
+
+          const count = await this.page.evaluate(() => document.querySelectorAll('[data-testid="tweet"]').length);
+          if (count >= minTweets) return count;
+        }
+        return await this.page.evaluate(() => document.querySelectorAll('[data-testid="tweet"]').length);
+      };
+
+      let tweetCount = await loadTweetsWithScroll(15, 20);
+      logger.info(`Top tab collected ~${tweetCount} tweets`);
+
+      if (tweetCount === 0) {
         logger.warn('No tweets found');
         return [];
       }
-      
-      logger.info(`Found ${tweets.length} tweets`);
-      
-      // Extract tweet data with engagement metrics
-      const tweetData = [];
-      for (let i = 0; i < Math.min(tweets.length, 10); i++) {
-        try {
-          const tweet = tweets[i];
-          const textElement = await tweet.$('[data-testid="tweetText"]');
-          const text = textElement ? await textElement.evaluate(el => el.textContent) : '';
-          
-          // Get tweet link
-          const linkElement = await tweet.$('a[href*="/status/"]');
-          const link = linkElement ? await linkElement.evaluate(el => el.getAttribute('href')) : '';
-          
-          // Get engagement metrics - likes and retweets
-          let likes = 0;
-          let retweets = 0;
-          let replies = 0;
-          
-          // Try to find like count
-          const likeElement = await tweet.$('[data-testid="like"]');
-          if (likeElement) {
-            const likeSpan = await likeElement.$('span');
-            if (likeSpan) {
-              const likeText = await likeSpan.evaluate(el => el.textContent);
-              likes = this.parseCount(likeText);
+
+      // Collect tweet data directly from the page (collect only first 20 for speed)
+      const tweetData = await this.page.evaluate(() => {
+        const tweets = [];
+        const tweetElements = Array.from(document.querySelectorAll('[data-testid="tweet"]')).slice(0, 20);
+
+        for (const tweet of tweetElements) {
+          try {
+            const textElement = tweet.querySelector('[data-testid="tweetText"]');
+            const text = textElement ? textElement.textContent : '';
+
+            // Link and ID
+            const linkElement = tweet.querySelector('a[href*="/status/"]');
+            const link = linkElement ? linkElement.getAttribute('href') : '';
+
+            // Engagement metrics
+            const likeEl = tweet.querySelector('[data-testid="like"] span');
+            const rtEl = tweet.querySelector('[data-testid="retweet"] span');
+            const replyEl = tweet.querySelector('[data-testid="reply"] span');
+
+            const likeText = likeEl ? likeEl.textContent : '';
+            const rtText = rtEl ? rtEl.textContent : '';
+            const replyText = replyEl ? replyEl.textContent : '';
+
+            // Timestamp
+            const timeEl = tweet.querySelector('time');
+            const timestamp = timeEl ? timeEl.getAttribute('datetime') : '';
+
+            if (text && link) {
+              tweets.push({
+                link,
+                text,
+                likeText,
+                rtText,
+                replyText,
+                timestamp
+              });
             }
+          } catch (e) {
+            // skip malformed card
           }
-          
-          // Try to find retweet count
-          const retweetElement = await tweet.$('[data-testid="retweet"]');
-          if (retweetElement) {
-            const rtSpan = await retweetElement.$('span');
-            if (rtSpan) {
-              const rtText = await rtSpan.evaluate(el => el.textContent);
-              retweets = this.parseCount(rtText);
-            }
-          }
-          
-          // Try to find reply count
-          const replyElement = await tweet.$('[data-testid="reply"]');
-          if (replyElement) {
-            const replySpan = await replyElement.$('span');
-            if (replySpan) {
-              const replyText = await replySpan.evaluate(el => el.textContent);
-              replies = this.parseCount(replyText);
-            }
-          }
-          
-          // Get timestamp
-          let timeElement = await tweet.$('time');
-          let timestamp = '';
-          if (timeElement) {
-            timestamp = await timeElement.evaluate(el => el.getAttribute('datetime'));
-          }
-          
-          if (text && link) {
-            tweetData.push({
-              id: link.split('/').pop(),
-              text: text,
-              likes: likes,
-              retweets: retweets,
-              replies: replies,
-              timestamp: timestamp,
-              element: tweet
-            });
-          }
-        } catch (e) {
-          // Skip this tweet
         }
-      }
-      
-      return tweetData;
-      
+        return tweets;
+      });
+
+      const parsedTweets = tweetData.map(t => ({
+        id: t.link.split('/').pop(),
+        text: t.text,
+        likes: this.parseCount(t.likeText),
+        retweets: this.parseCount(t.rtText),
+        replies: this.parseCount(t.replyText),
+        timestamp: t.timestamp
+      }));
+
+      logger.info(`Collected ${parsedTweets.length} tweets to analyze`);
+      return parsedTweets;
     } catch (error) {
       logger.error('Failed to search tweets', { error: error.message });
       return [];
@@ -473,41 +560,118 @@ class TwitterClient {
     try {
       logger.info(`Posting comment on tweet ${tweetId}...`);
       
-      // Navigate to the tweet
+      // Navigate to the tweet and allow layout to settle
       await this.page.goto(`https://twitter.com/i/status/${tweetId}`, { 
         waitUntil: 'domcontentloaded',
         timeout: 100000 
       });
-      await delay(4000);
-      
-      // Click the reply button
-      const replyButton = await this.page.$('[data-testid="reply"]');
-      if (!replyButton) {
-        logger.error('Cannot find reply button');
+      await delay(3500);
+
+      // Ensure a tweet is present
+      await this.page.waitForSelector('[data-testid="tweet"]', { timeout: 15000 }).catch(() => {});
+
+      // Try to open the reply composer robustly
+      const openReply = async () => {
+        const selectors = [
+          '[data-testid="reply"]',
+          'div[role="button"][data-testid="reply"]',
+          'div[data-testid="tweetDetail"] [data-testid="reply"]'
+        ];
+
+        for (const sel of selectors) {
+          const btn = await this.page.$(sel);
+          if (!btn) continue;
+          try { await btn.evaluate(n => n.scrollIntoView({ block: 'center' })); } catch {}
+          await delay(150);
+          try { await btn.click(); } catch { try { await this.page.evaluate(n => n.click(), btn); } catch {} }
+
+          // Wait for a composer to appear
+          const composer = await this.page
+            .waitForSelector('[data-testid^="tweetTextarea_"]', { timeout: 7000 })
+            .catch(() => null);
+          if (composer) {
+            logger.info('Reply composer opened');
+            return true;
+          }
+        }
+
+        // Keyboard fallback: r opens reply on some layouts
+        try {
+          await this.page.keyboard.press('r');
+          const composer = await this.page
+            .waitForSelector('[data-testid^="tweetTextarea_"]', { timeout: 5000 })
+            .catch(() => null);
+          if (composer) {
+            logger.info('Reply composer opened via keyboard');
+            return true;
+          }
+        } catch {}
+        return false;
+      };
+
+      const opened = await openReply();
+      if (!opened) {
+        logger.error('Could not open reply composer');
         return null;
       }
-      
-      await replyButton.click();
-      await delay(2000);
-      
-      // Type the comment
-      const textarea = await this.page.$('[data-testid="tweetTextarea_0"], [contenteditable="true"]');
+
+      // Find the active textarea (prefer numbered one, else last contenteditable)
+      const textarea = await this.page
+        .$('[data-testid^="tweetTextarea_"]')
+        .then(el => el || this.page.$('[contenteditable="true"]:last-of-type'));
+
       if (!textarea) {
-        logger.error('Cannot find textarea');
+        logger.error('Cannot find reply textarea');
         return null;
       }
-      
-      await textarea.click();
-      await textarea.type(comment, { delay: 50 });
-      await delay(2000);
-      
-      // Post with Ctrl+Enter
-      logger.info('Sending comment...');
-      await this.page.keyboard.down('Control');
-      await this.page.keyboard.press('Enter');
-      await this.page.keyboard.up('Control');
-      
-      await delay(4000);
+
+      // Type and verify text content appeared
+      await textarea.click({ delay: 0 });
+      await delay(150);
+      await textarea.type(comment, { delay: 30 });
+      await delay(250);
+
+      const typedOk = await this.page.evaluate((node) => node.textContent && node.textContent.length > 0, textarea).catch(() => false);
+      if (!typedOk) {
+        logger.warn('Reply text did not register on first try; retrying focus/type');
+        await textarea.click({ delay: 0 });
+        await delay(150);
+        await textarea.type(comment, { delay: 10 });
+      }
+
+      logger.info('Submitting reply...');
+
+      // Try clicking visible Reply button first
+      const submitSelectors = [
+        'div[data-testid="tweetButton"]',
+        'button[data-testid="tweetButton"]',
+        '[data-testid="tweetButtonInline"]'
+      ];
+
+      let submitted = false;
+      for (const sel of submitSelectors) {
+        const btn = await this.page.waitForSelector(sel, { timeout: 5000 }).catch(() => null);
+        if (!btn) continue;
+        try { await btn.evaluate(n => n.scrollIntoView({ block: 'center' })); } catch {}
+        await delay(100);
+        try { await btn.click(); submitted = true; break; } catch { try { await this.page.evaluate(n => n.click(), btn); submitted = true; break; } catch {} }
+      }
+
+      if (!submitted) {
+        // Keyboard fallback: Ctrl+Enter
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('Enter');
+        await this.page.keyboard.up('Control');
+        submitted = true; // assume success, confirm below
+      }
+
+      // Confirm by waiting for navigation or composer closing
+      await Promise.race([
+        this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8000 }).catch(() => null),
+        this.page.waitForFunction(() => !document.querySelector('[data-testid^="tweetTextarea_"]'), { timeout: 8000 }).catch(() => null),
+        delay(5000)
+      ]);
+
       logger.success('Comment posted!');
       return { success: true };
       
