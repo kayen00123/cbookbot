@@ -40,8 +40,10 @@ class TwitterClient {
     try {
       logger.info('Launching Chrome...');
       
-      // Check if cookies exist
-      const hasCookies = fs.existsSync(this.cookiesPath);
+      // Check if cookies exist (file or environment variable)
+      const hasCookiesFile = fs.existsSync(this.cookiesPath);
+      const hasCookiesEnv = process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.length > 0;
+      const hasCookies = hasCookiesFile || hasCookiesEnv;
       
       // Detect if running on Linux (fly.io) or Windows
       const isLinux = process.platform === 'linux';
@@ -63,13 +65,20 @@ class TwitterClient {
       }
       
       this.browser = await puppeteer.launch(launchOptions);
-
+      
       this.page = await this.browser.newPage();
       
       // Try to load saved cookies
       if (hasCookies) {
         logger.info('Found saved cookies, loading...');
-        const cookies = JSON.parse(fs.readFileSync(this.cookiesPath, 'utf8'));
+        let cookies;
+        if (hasCookiesEnv) {
+          // Load from environment variable (base64 encoded)
+          cookies = JSON.parse(Buffer.from(process.env.TWITTER_COOKIES, 'base64').toString('utf8'));
+        } else {
+          // Load from file
+          cookies = JSON.parse(fs.readFileSync(this.cookiesPath, 'utf8'));
+        }
         await this.page.setCookie(...cookies);
         
         // Try to go to home
@@ -108,7 +117,12 @@ class TwitterClient {
       // Save cookies
       const cookies = await this.page.cookies();
       fs.writeFileSync(this.cookiesPath, JSON.stringify(cookies));
+      
+      // Also output base64 for easy copy to fly.io
+      const base64Cookies = Buffer.from(JSON.stringify(cookies)).toString('base64');
       logger.success('Session saved! You wont need to login next time.');
+      logger.info('Base64 cookies for fly.io (copy this to TWITTER_COOKIES secret):');
+      logger.info(base64Cookies);
       
       this.isInitialized = true;
       return true;
