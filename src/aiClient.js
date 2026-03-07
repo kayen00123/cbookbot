@@ -106,7 +106,7 @@ Do not include any other text - just the JSON array.`;
             'HTTP-Referer': 'https://cookbook.xyz',
             'X-Title': 'Cookbook DEX Bot'
           },
-          timeout: 60000
+          timeout: 100000
         }
       );
 
@@ -172,7 +172,7 @@ Just return the tweet text, nothing else.`;
             'HTTP-Referer': 'https://cookbook.xyz',
             'X-Title': 'Cookbook DEX Bot'
           },
-          timeout: 60000
+          timeout: 100000
         }
       );
 
@@ -220,7 +220,7 @@ Just return the comment text, nothing else.`;
             'HTTP-Referer': 'https://cookbook.xyz',
             'X-Title': 'Cookbook DEX Bot'
           },
-          timeout: 60000
+          timeout: 100000
         }
       );
 

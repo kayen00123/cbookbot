@@ -103,7 +103,7 @@ class TwitterClient {
       logger.info('Opening Twitter login...');
       await this.page.goto('https://twitter.com/login', { 
         waitUntil: 'domcontentloaded', 
-        timeout: 60000 
+        timeout: 100000 
       });
       
       logger.info('='.repeat(50));
@@ -167,7 +167,7 @@ class TwitterClient {
       // Go to home first to avoid detached frame
       await this.page.goto('https://twitter.com/home', { 
         waitUntil: 'domcontentloaded',
-        timeout: 60000 
+        timeout: 100000 
       });
       await delay(3000);
       
@@ -232,7 +232,7 @@ class TwitterClient {
       // Go to compose once and build the whole thread there
       await this.page.goto('https://twitter.com/compose/tweet', {
         waitUntil: 'domcontentloaded',
-        timeout: 60000
+        timeout: 100000
       });
       await delay(4000);
 
@@ -311,7 +311,7 @@ class TwitterClient {
 
       let posted = false;
       for (const sel of postSelectors) {
-        const btn = await this.page.waitForSelector(sel, { timeout: 6000 }).catch(() => null);
+        const btn = await this.page.waitForSelector(sel, { timeout: 10000 }).catch(() => null);
         if (btn) {
           logger.info('Submitting thread...');
           await btn.click();
@@ -351,7 +351,7 @@ class TwitterClient {
       const searchUrl = `https://twitter.com/search?q=${encodeURIComponent(hashtag)}&src=typed_query&f=live`;
       await this.page.goto(searchUrl, { 
         waitUntil: 'domcontentloaded',
-        timeout: 60000 
+        timeout: 100000 
       });
       await delay(5000);
       
@@ -476,7 +476,7 @@ class TwitterClient {
       // Navigate to the tweet
       await this.page.goto(`https://twitter.com/i/status/${tweetId}`, { 
         waitUntil: 'domcontentloaded',
-        timeout: 60000 
+        timeout: 100000 
       });
       await delay(4000);
       
