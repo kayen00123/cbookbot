@@ -77,16 +77,19 @@ class Scheduler {
       }
     });
 
-    // Schedule hashtag engagement at specific time (from HASHTAG_TIME env var)
-    if (config.bot.hashtagTime) {
-      const [hashtagHour, hashtagMinute] = config.bot.hashtagTime.split(':').map(Number);
-      const hashtagJob = schedule.scheduleJob(
-        { hour: hashtagHour, minute: hashtagMinute },
-        () => this.engageWithTrendingHashtags()
-      );
-      if (hashtagJob) {
-        this.jobs.push(hashtagJob);
-        logger.info('Scheduled hashtag engagement job', { time: config.bot.hashtagTime });
+    // Schedule hashtag engagement at specific times (from HASHTAG_TIME env var)
+    const hashtagTimes = config.bot.hashtagTimes || [];
+    if (hashtagTimes.length > 0) {
+      for (const time of hashtagTimes) {
+        const [hashtagHour, hashtagMinute] = time.split(':').map(Number);
+        const hashtagJob = schedule.scheduleJob(
+          { hour: hashtagHour, minute: hashtagMinute },
+          () => this.engageWithTrendingHashtags()
+        );
+        if (hashtagJob) {
+          this.jobs.push(hashtagJob);
+          logger.info('Scheduled hashtag engagement job', { time: time });
+        }
       }
     } else {
       // Default: run every 30 minutes if no specific time set
@@ -97,16 +100,19 @@ class Scheduler {
       }
     }
 
-    // Schedule account monitoring (from ACCOUNT_TIME env var)
-    if (config.bot.accountTime) {
-      const [accountHour, accountMinute] = config.bot.accountTime.split(':').map(Number);
-      const accountJob = schedule.scheduleJob(
-        { hour: accountHour, minute: accountMinute },
-        () => this.engageWithMonitoredAccounts()
-      );
-      if (accountJob) {
-        this.jobs.push(accountJob);
-        logger.info('Scheduled account monitoring job', { time: config.bot.accountTime });
+    // Schedule account monitoring at specific times (from ACCOUNT_TIME env var)
+    const accountTimes = config.bot.accountTimes || [];
+    if (accountTimes.length > 0) {
+      for (const time of accountTimes) {
+        const [accountHour, accountMinute] = time.split(':').map(Number);
+        const accountJob = schedule.scheduleJob(
+          { hour: accountHour, minute: accountMinute },
+          () => this.engageWithMonitoredAccounts()
+        );
+        if (accountJob) {
+          this.jobs.push(accountJob);
+          logger.info('Scheduled account monitoring job', { time: time });
+        }
       }
     } else {
       // Default: run at 9 AM and 9 PM if no time set
