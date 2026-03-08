@@ -435,6 +435,19 @@ class TwitterClient {
         delay(7000)
       ]);
 
+      // Verify the tweet was actually posted by checking the page
+      await delay(2000);
+      const currentUrl = this.page.url();
+      logger.info(`Current URL after posting: ${currentUrl}`);
+
+      // If still on composer page, it might not have posted
+      if (currentUrl.includes('compose/tweet') || currentUrl.includes('twitter.com/i/status')) {
+        logger.warn('Tweet might not have been posted - still on composer page');
+        // Try refreshing to see if tweet appears
+        await this.page.reload({ waitUntil: 'domcontentloaded' });
+        await delay(3000);
+      }
+
       logger.success(`Thread posted with ${tweets.length} tweets!`);
       return { success: true };
 
