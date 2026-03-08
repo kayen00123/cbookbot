@@ -234,7 +234,7 @@ class TwitterClient {
         waitUntil: 'domcontentloaded',
         timeout: 100000
       });
-      await delay(4000);
+      await delay(6000); // Wait longer for composer to load
 
       // Utility: count how many tweet textareas exist
       const getComposerCount = async () => {
@@ -254,17 +254,38 @@ class TwitterClient {
       };
 
       // Helper to get a textarea for a specific index in the thread
-      const getTextareaForIndex = async (i, timeout = 8000) => {
-        const selector = `[data-testid="tweetTextarea_${i}"]`;
-        let area = await this.page.$(selector);
-        if (!area) {
-          // Fallback: last contenteditable is often the active composer
-          area = await this.page.$('[data-testid^="tweetTextarea_"], [contenteditable="true"]:last-of-type');
+      const getTextareaForIndex = async (i, timeout = 15000) => {
+        // More robust selector list for Twitter's composer
+        const selectors = [
+          `[data-testid="tweetTextarea_${i}"]`,
+          `[data-testid="tweetTextarea_0"]`,
+          '[data-testid="tweetTextarea"]',
+          '[contenteditable="true"][role="textbox"]',
+          '[contenteditable="true"]',
+          'div[role="textbox"]'
+        ];
+        
+        // First try direct selector
+        for (const sel of selectors) {
+          const area = await this.page.$(sel);
+          if (area) {
+            logger.info(`Found textarea using selector: ${sel}`);
+            return area;
+          }
         }
-        if (!area) {
-          area = await this.page.waitForSelector(selector, { timeout }).catch(() => null);
+        
+        // Wait and try again
+        await delay(2000);
+        for (const sel of selectors) {
+          const area = await this.page.$(sel);
+          if (area) {
+            logger.info(`Found textarea after wait using selector: ${sel}`);
+            return area;
+          }
         }
-        return area;
+        
+        // Last resort - wait for any textarea
+        return await this.page.waitForSelector('[data-testid="tweetTextarea"], [contenteditable="true"]', { timeout }).catch(() => null);
       };
 
       // Type the first tweet
