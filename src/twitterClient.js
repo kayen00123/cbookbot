@@ -440,12 +440,23 @@ class TwitterClient {
       const currentUrl = this.page.url();
       logger.info(`Current URL after posting: ${currentUrl}`);
 
-      // If still on composer page, it might not have posted
-      if (currentUrl.includes('compose/tweet') || currentUrl.includes('twitter.com/i/status')) {
-        logger.warn('Tweet might not have been posted - still on composer page');
-        // Try refreshing to see if tweet appears
-        await this.page.reload({ waitUntil: 'domcontentloaded' });
-        await delay(3000);
+      // If still on composer page, the tweet was NOT posted
+      if (currentUrl.includes('compose')) {
+        logger.error('Tweet FAILED to post - still on composer page!');
+        // Try one more time with keyboard shortcut
+        logger.info('Retrying with Ctrl+Enter...');
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('Enter');
+        await this.page.keyboard.up('Control');
+        await delay(5000);
+        
+        const retryUrl = this.page.url();
+        logger.info(`URL after retry: ${retryUrl}`);
+        
+        if (retryUrl.includes('compose')) {
+          logger.error('Tweet failed to post even after retry');
+          return null;
+        }
       }
 
       logger.success(`Thread posted with ${tweets.length} tweets!`);
