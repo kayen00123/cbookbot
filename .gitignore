@@ -1,8 +1,9 @@
 # Environment variables
 .env
 
-# Twitter session cookies (contains your login session)
-twitter_cookies.json
+# Twitter session cookies - use TWITTER_COOKIES env var in fly.io
+# Or uncomment below to push cookies file:
+# twitter_cookies.json
 
 # Chrome user data - ignore browser cache folders but keep custom json files
 user-data/*/
