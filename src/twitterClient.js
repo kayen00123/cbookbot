@@ -304,10 +304,10 @@ class TwitterClient {
       });
       await delay(6000); // Wait longer for composer to load
 
-      // Utility: count how many tweet textareas exist
+      // Utility: count how many tweet composer textboxes exist (deduplicated)
       const getComposerCount = async () => {
         return await this.page.evaluate(() => {
-          return document.querySelectorAll('[data-testid^="tweetTextarea_"]').length || 0;
+          return document.querySelectorAll('[data-testid^="tweetTextarea_"] [contenteditable="true"][role="textbox"]').length || 0;
         });
       };
 
@@ -316,44 +316,30 @@ class TwitterClient {
         return await this.page.waitForFunction(
           (sel, expectedCount) => document.querySelectorAll(sel).length >= expectedCount,
           { timeout },
-          '[data-testid^="tweetTextarea_"]',
+          '[data-testid^="tweetTextarea_"] [contenteditable="true"][role="textbox"]',
           expected
         ).catch(() => null);
       };
 
-      // Helper to get a textarea for a specific index in the thread
+      // Helper to get a textarea (actual contenteditable textbox) for a specific index in the thread
       const getTextareaForIndex = async (i, timeout = 15000) => {
-        // More robust selector list for Twitter's composer
-        const selectors = [
-          `[data-testid="tweetTextarea_${i}"]`,
-          `[data-testid="tweetTextarea_0"]`,
-          '[data-testid="tweetTextarea"]',
-          '[contenteditable="true"][role="textbox"]',
-          '[contenteditable="true"]',
-          'div[role="textbox"]'
-        ];
-        
-        // First try direct selector
-        for (const sel of selectors) {
-          const area = await this.page.$(sel);
-          if (area) {
-            logger.info(`Found textarea using selector: ${sel}`);
-            return area;
+        const strictSelector = '[data-testid^="tweetTextarea_"] [contenteditable="true"][role="textbox"]';
+        const start = Date.now();
+        while (Date.now() - start < timeout) {
+          const boxes = await this.page.$(strictSelector);
+          if (boxes.length > i) {
+            logger.info(`Found textarea using strict selector at index ${i}`);
+            return boxes[i];
           }
+          await delay(300);
         }
-        
-        // Wait and try again
-        await delay(2000);
-        for (const sel of selectors) {
-          const area = await this.page.$(sel);
-          if (area) {
-            logger.info(`Found textarea after wait using selector: ${sel}`);
-            return area;
-          }
+        // Fallback to any contenteditable role textbox in DOM order
+        const fallbacks = await this.page.$('[contenteditable="true"][role="textbox"]');
+        if (fallbacks.length > i) {
+          logger.info(`Found fallback textarea at index ${i}`);
+          return fallbacks[i];
         }
-        
-        // Last resort - wait for any textarea
-        return await this.page.waitForSelector('[data-testid="tweetTextarea"], [contenteditable="true"]', { timeout }).catch(() => null);
+        return null;
       };
 
       // First tweet will be typed using the verified helper below
@@ -514,7 +500,7 @@ class TwitterClient {
 
       // Pre-submit validation: ensure each composer has content
       const perIndexLengths = await this.page.evaluate(() => {
-        const nodes = Array.from(document.querySelectorAll('[data-testid^="tweetTextarea_"]'));
+        const nodes = Array.from(document.querySelectorAll('[data-testid^="tweetTextarea_"] [contenteditable="true"][role="textbox"]'));
         return nodes.map(n => (n.textContent || '').trim().length);
       }).catch(() => []);
       if (perIndexLengths.length < tweets.length || perIndexLengths.some(len => len === 0)) {
@@ -560,7 +546,7 @@ class TwitterClient {
         if (disabled) {
           logger.warn('Post button disabled before navigation; checking for over-limit content');
           const idxOver = await this.page.evaluate(() => {
-            const areas = Array.from(document.querySelectorAll('[data-testid^="tweetTextarea_"]'));
+            const areas = Array.from(document.querySelectorAll('[data-testid^="tweetTextarea_"] [contenteditable="true"][role="textbox"]'));
             const max = 280;
             let offender = -1;
             areas.forEach((n, i) => { const len = (n.textContent || '').trim().length; if (len > max && offender === -1) offender = i; });
@@ -608,7 +594,7 @@ class TwitterClient {
       const currentUrl = this.page.url();
       logger.info(`Current URL after posting: ${currentUrl}`);
       try {
-        const lens = await this.page.evaluate(() => Array.from(document.querySelectorAll('[data-testid^="tweetTextarea_"]')).map(n => (n.textContent || '').trim().length));
+        const lens = await this.page.evaluate(() => Array.from(document.querySelectorAll('[data-testid^="tweetTextarea_"] [contenteditable="true"][role="textbox"]')).map(n => (n.textContent || '').trim().length));
         logger.info('Composer lengths after submit attempt', { lengths: lens });
       } catch {}
 
@@ -909,4 +895,3 @@ class TwitterClient {
 }
 
 module.exports = new TwitterClient();
-
