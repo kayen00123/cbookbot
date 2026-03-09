@@ -82,7 +82,7 @@ class TwitterClient {
         await this.page.setCookie(...cookies);
         
         // Try to go to home
-        await this.page.goto('https://twitter.com/home', { 
+        await this.page.goto('https://x.com/home', { 
           waitUntil: 'domcontentloaded', 
           timeout: 100000 
         });
@@ -90,7 +90,7 @@ class TwitterClient {
         
         // Check if still logged in
         const url = this.page.url();
-        if (url.includes('/home') && !url.includes('/login')) {
+        if ((url.includes('x.com') || url.includes('twitter.com')) && url.includes('/home') && !url.includes('/login')) {
           logger.success('Logged in using saved cookies!');
           this.isInitialized = true;
           return true;
@@ -101,7 +101,7 @@ class TwitterClient {
 
       // Need to login
       logger.info('Opening Twitter login...');
-      await this.page.goto('https://twitter.com/login', { 
+      await this.page.goto('https://x.com/login', { 
         waitUntil: 'domcontentloaded', 
         timeout: 100000 
       });
@@ -165,7 +165,7 @@ class TwitterClient {
       logger.info('Posting tweet...');
       
       // Go to home first to avoid detached frame
-      await this.page.goto('https://twitter.com/home', { 
+      await this.page.goto('https://x.com/home', { 
         waitUntil: 'domcontentloaded',
         timeout: 100000 
       });
@@ -178,7 +178,7 @@ class TwitterClient {
         await delay(3000);
       } else {
         // Fallback to direct URL
-        await this.page.goto('https://twitter.com/compose/tweet', { 
+        await this.page.goto('https://x.com/compose/post', { 
           waitUntil: 'domcontentloaded',
           timeout: 30000 
         });
@@ -207,13 +207,81 @@ class TwitterClient {
         }
       }
       
-      // Post with Ctrl+Enter
-      logger.info('Sending tweet...');
-      await this.page.keyboard.down('Control');
-      await this.page.keyboard.press('Enter');
-      await this.page.keyboard.up('Control');
-      
-      await delay(5000);
+      // Ensure text actually registered
+      const textPresent = await this.page.evaluate((sel) => {
+        const el = document.querySelector(sel) || document.querySelector('[data-testid="tweetTextarea_0"]') || document.querySelector('[contenteditable="true"]');
+        return !!(el && el.textContent && el.textContent.length > 0);
+      }, '[data-testid="tweetTextarea_0"], [contenteditable="true"][role="textbox"]').catch(() => false);
+      if (!textPresent) {
+        logger.error('Tweet text did not register in composer');
+        return null;
+      }
+
+      // Prefer clicking enabled Post button; fallback to Ctrl+Enter
+      const postBtn = await this.page.$('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
+      let clicked = false;
+      if (postBtn) {
+        try {
+          const enabled = await this.page.evaluate((node) => node.getAttribute('aria-disabled') !== 'true', postBtn).catch(() => true);
+          if (enabled) {
+            logger.info('Sending tweet via button click...');
+            try { await postBtn.evaluate(n => n.scrollIntoView({ block: 'center' })); } catch {}
+            await delay(100);
+            try { await postBtn.click(); clicked = true; } catch { await this.page.evaluate(n => n.click(), postBtn).then(() => clicked = true).catch(() => {}); }
+          }
+        } catch {}
+      }
+      if (!clicked) {
+        logger.info('Sending tweet via Ctrl+Enter...');
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('Enter');
+        await this.page.keyboard.up('Control');
+      }
+
+      // Wait for navigation or composer close
+      await Promise.race([
+        this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => null),
+        this.page.waitForFunction(() => !document.querySelector('[data-testid^="tweetTextarea_"]'), { timeout: 10000 }).catch(() => null),
+        delay(7000)
+      ]);
+
+      // Detect errors/modals keeping us on composer
+      const stillCompose = this.page.url().includes('compose');
+      if (stillCompose) {
+        const hadDialog = await this.page.$('div[role="dialog"]');
+        const alertText = await this.page.evaluate(() => {
+          const t = [];
+          const alert = document.querySelector('[role="alert"], [data-testid="toast"], div[aria-live="polite"]');
+          if (alert && alert.innerText) t.push(alert.innerText.trim());
+          const dlg = document.querySelector('div[role="dialog"]');
+          if (dlg && dlg.innerText) t.push(dlg.innerText.trim());
+          return t.join(' | ');
+        }).catch(() => '');
+
+        if (hadDialog) {
+          // Try to confirm dialog
+          const confirmSel = 'div[role="dialog"] [data-testid="confirmationSheetConfirm"], div[role="dialog"] [data-testid="sheetDialog"] [role="button"], div[role="dialog"] button';
+          const confirmBtn = await this.page.$(confirmSel);
+          if (confirmBtn) {
+            try { await confirmBtn.click(); } catch { try { await this.page.evaluate(n => n.click(), confirmBtn); } catch {} }
+            await delay(3000);
+          }
+        }
+
+        // Re-evaluate if navigated
+        if (this.page.url().includes('compose')) {
+          logger.error('Tweet failed to post; composer still open', { alert: alertText });
+          return null;
+        }
+      }
+
+      // Success if we navigated to a status URL or composer closed
+      const successUrl = this.page.url();
+      const ok = /\/status\//.test(successUrl) || !await this.page.$('[data-testid^="tweetTextarea_"]');
+      if (!ok) {
+        logger.error('Tweet may not have posted (no status URL and composer still present)');
+        return null;
+      }
       logger.success('Tweet posted!');
       return { success: true };
       
@@ -230,7 +298,7 @@ class TwitterClient {
       logger.info(`Posting thread with ${tweets.length} tweets...`);
 
       // Open the dedicated composer and build the entire thread there
-      await this.page.goto('https://twitter.com/compose/tweet', {
+      await this.page.goto('https://x.com/compose/post', {
         waitUntil: 'domcontentloaded',
         timeout: 100000
       });
@@ -404,6 +472,7 @@ class TwitterClient {
       // Post the entire thread: prefer the main Tweet/Post button (Tweet all / Post)
       const postSelectors = [
         '[data-testid="tweetButton"]',
+        '[data-testid="tweetButtonInline"]',
         'div[role="button"][data-testid="tweetButton"]',
         'button[data-testid="tweetButton"]'
       ];
@@ -412,8 +481,11 @@ class TwitterClient {
       for (const sel of postSelectors) {
         const btn = await this.page.waitForSelector(sel, { timeout: 12000 }).catch(() => null);
         if (btn) {
+          const enabled = await this.page.evaluate((node) => node.getAttribute('aria-disabled') !== 'true', btn).catch(() => true);
+          if (!enabled) {
+            logger.warn('Post button is disabled; re-checking text content and focus');
+          }
           logger.info('Submitting thread...');
-          // Ensure it's scrolled into view, then click
           try { await btn.evaluate((n) => n.scrollIntoView({ block: 'center' })); } catch {}
           await delay(150);
           try { await btn.click(); } catch { await this.page.evaluate((n) => n.click(), btn).catch(() => {}); }
@@ -429,10 +501,11 @@ class TwitterClient {
         await this.page.keyboard.up('Control');
       }
 
-      // Wait for navigation away from composer or a short settle time
+      // Wait for navigation away from composer or composer closing
       await Promise.race([
-        this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => null),
-        delay(7000)
+        this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => null),
+        this.page.waitForFunction(() => !document.querySelector('[data-testid^="tweetTextarea_"]'), { timeout: 12000 }).catch(() => null),
+        delay(9000)
       ]);
 
       // Verify the tweet was actually posted by checking the page
@@ -454,7 +527,16 @@ class TwitterClient {
         logger.info(`URL after retry: ${retryUrl}`);
         
         if (retryUrl.includes('compose')) {
-          logger.error('Tweet failed to post even after retry');
+          // Capture alert/toast text for debugging
+          const alertText = await this.page.evaluate(() => {
+            const t = [];
+            const alert = document.querySelector('[role="alert"], [data-testid="toast"], div[aria-live="polite"]');
+            if (alert && alert.innerText) t.push(alert.innerText.trim());
+            const dlg = document.querySelector('div[role="dialog"]');
+            if (dlg && dlg.innerText) t.push(dlg.innerText.trim());
+            return t.join(' | ');
+          }).catch(() => '');
+          logger.error('Tweet failed to post even after retry', { alert: alertText });
           return null;
         }
       }
@@ -606,7 +688,7 @@ class TwitterClient {
       logger.info(`Posting comment on tweet ${tweetId}...`);
       
       // Navigate to the tweet and allow layout to settle
-      await this.page.goto(`https://twitter.com/i/status/${tweetId}`, { 
+      await this.page.goto(`https://x.com/i/status/${tweetId}`, { 
         waitUntil: 'domcontentloaded',
         timeout: 100000 
       });
