@@ -114,9 +114,12 @@ Do not include any other text - just the JSON array.`;
         const text = response.data.choices[0].message.content;
         logger.info(`OpenRouter raw response: ${text.substring(0, 200)}...`);
         try {
+          // Try to find JSON array in the response
           const jsonMatch = text.match(/\[[\s\S]*\]/);
           if (jsonMatch) {
-            const tweets = JSON.parse(jsonMatch[0]);
+            // Clean up the JSON - remove newlines within the array
+            const cleanedJson = jsonMatch[0].replace(/\n\s*/g, ' ').replace(/\s+/g, ' ');
+            const tweets = JSON.parse(cleanedJson);
             logger.success(`OpenRouter: Generated ${tweets.length} tweets`);
             return tweets;
           }
@@ -126,6 +129,7 @@ Do not include any other text - just the JSON array.`;
         // Fallback: split by numbered tweets or just return as single tweet
         const tweets = text.split('\n').filter(t => t.trim().length > 10);
         if (tweets.length > 0) {
+          logger.info(`Using fallback parsing: ${tweets.length} tweets extracted`);
           return tweets.slice(0, numTweets);
         }
       }

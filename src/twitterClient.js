@@ -363,41 +363,72 @@ class TwitterClient {
       });
       await delay(6000); // Wait longer for composer to load
 
-      // Utility: count how many tweet composer textboxes exist (deduplicated)
+      // Utility: count how many tweet composer textboxes exist
       const getComposerCount = async () => {
         return await this.page.evaluate(() => {
-          return document.querySelectorAll('[data-testid^="tweetTextarea_"] [contenteditable="true"][role="textbox"]').length || 0;
+          // Try multiple selectors
+          let count = document.querySelectorAll('[data-testid^="tweetTextarea_"] [contenteditable="true"][role="textbox"]').length;
+          if (count === 0) count = document.querySelectorAll('[data-testid^="tweetTextarea_"]').length;
+          if (count === 0) count = document.querySelectorAll('[contenteditable="true"][role="textbox"]').length;
+          if (count === 0) count = document.querySelectorAll('[contenteditable="true"]').length;
+          return count;
         });
       };
 
       // Utility: wait until composer count becomes expected
       const waitForComposerCount = async (expected, timeout = 10000) => {
-        return await this.page.waitForFunction(
-          (sel, expectedCount) => document.querySelectorAll(sel).length >= expectedCount,
-          { timeout },
+        // Try multiple selectors
+        const selectors = [
           '[data-testid^="tweetTextarea_"] [contenteditable="true"][role="textbox"]',
-          expected
-        ).catch(() => null);
+          '[data-testid^="tweetTextarea_"]',
+          '[contenteditable="true"][role="textbox"]'
+        ];
+        
+        for (const sel of selectors) {
+          try {
+            await this.page.waitForFunction(
+              (s, expectedCount) => document.querySelectorAll(s).length >= expectedCount,
+              { timeout: timeout / selectors.length },
+              sel,
+              expected
+            );
+            return true;
+          } catch { continue; }
+        }
+        return false;
       };
 
       // Helper to get a textarea (actual contenteditable textbox) for a specific index in the thread
       const getTextareaForIndex = async (i, timeout = 15000) => {
-        const strictSelector = '[data-testid^="tweetTextarea_"] [contenteditable="true"][role="textbox"]';
+        // Multiple selector strategies for Twitter's changing page structure
+        const selectors = [
+          '[data-testid^="tweetTextarea_"] [contenteditable="true"][role="textbox"]',
+          '[data-testid^="tweetTextarea_"]',
+          '[contenteditable="true"][role="textbox"]',
+          '.public-DraftStyleDefault-block',
+          'div[contenteditable="true"]'
+        ];
+        
         const start = Date.now();
         while (Date.now() - start < timeout) {
-          const boxes = await this.page.$(strictSelector);
-          if (boxes.length > i) {
-            logger.info(`Found textarea using strict selector at index ${i}`);
-            return boxes[i];
+          for (const selector of selectors) {
+            const boxes = await this.page.$(selector);
+            if (boxes && boxes.length > i) {
+              logger.info(`Found textarea using selector "${selector}" at index ${i}`);
+              return boxes[i];
+            }
           }
-          await delay(300);
+          await delay(500);
         }
-        // Fallback to any contenteditable role textbox in DOM order
-        const fallbacks = await this.page.$('[contenteditable="true"][role="textbox"]');
-        if (fallbacks.length > i) {
-          logger.info(`Found fallback textarea at index ${i}`);
-          return fallbacks[i];
+        
+        // Last resort: try to find any editable element
+        logger.warn('Could not find composer with standard selectors, trying fallback');
+        const anyEditable = await this.page.$('[contenteditable="true"]');
+        if (anyEditable && anyEditable.length > i) {
+          return anyEditable[i];
         }
+        
+        logger.error('No textarea found for thread composer');
         return null;
       };
 
