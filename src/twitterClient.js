@@ -229,12 +229,44 @@ class TwitterClient {
     try {
       logger.info(`Posting thread with ${tweets.length} tweets...`);
 
-      // Open the dedicated composer and build the entire thread there
-      await this.page.goto('https://twitter.com/compose/tweet', {
-        waitUntil: 'domcontentloaded',
-        timeout: 100000
-      });
-      await delay(6000); // Wait longer for composer to load
+      // Helper to check if we're on compose page
+      const isOnComposePage = async () => {
+        const url = this.page.url();
+        const title = await this.page.evaluate(() => document.title);
+        return url.includes('/compose/post') && !title.includes('Home');
+      };
+
+      // Try to navigate to compose page with retries
+      let composeLoaded = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        logger.info(`Navigate to compose page - attempt ${attempt}`);
+        await this.page.goto('https://twitter.com/compose/post', {
+          waitUntil: 'networkidle2',
+          timeout: 60000
+        });
+        await delay(5000);
+        
+        // Wait for page to actually load compose
+        try {
+          await this.page.waitForSelector('[data-testid="tweetTextarea_0"]', { timeout: 10000 });
+          const onCompose = await isOnComposePage();
+          if (onCompose) {
+            composeLoaded = true;
+            logger.info('Successfully on compose page!');
+            break;
+          }
+        } catch {}
+        
+        logger.warn(`Attempt ${attempt} failed to load compose page properly`);
+        await delay(3000);
+      }
+
+      if (!composeLoaded) {
+        logger.error('Could not load compose page after 3 attempts');
+        return null;
+      }
+
+      await delay(3000);
 
       // DEBUG: Log page state
       const currentUrl = this.page.url();
@@ -767,3 +799,4 @@ class TwitterClient {
 }
 
 module.exports = new TwitterClient();
+
