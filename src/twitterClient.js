@@ -356,16 +356,7 @@ class TwitterClient {
         return await this.page.waitForSelector('[data-testid="tweetTextarea"], [contenteditable="true"]', { timeout }).catch(() => null);
       };
 
-      // Type the first tweet
-      const firstArea = await getTextareaForIndex(0, 15000);
-      if (!firstArea) {
-        logger.error('Cannot find first textarea for thread');
-        return null;
-      }
-      await firstArea.click({ delay: 0 });
-      await delay(500);
-      await firstArea.type(tweets[0], { delay: 30 });
-      await delay(1200);
+      // First tweet will be typed using the verified helper below
 
       // Robust click helper with retries + scroll + DOM validation
       const clickAddWithRetry = async (targetCount, expectedIndex) => {
@@ -441,7 +432,69 @@ class TwitterClient {
         return false;
       };
 
-      // Build the rest of the thread
+      // Helper: enforce 280-char limit for free accounts
+      const toSafeTweet = (t) => {
+        const txt = String(t || '').trim();
+        if (txt.length <= 280) return txt;
+        const sliced = txt.slice(0, 276).replace(/\s+$/,'');
+        return `${sliced} …`;
+      };
+
+      // Verify that a given textarea actually contains text after typing
+      const verifyTyped = async (elHandle) => {
+        try {
+          return await this.page.evaluate((node) => !!(node && node.textContent && node.textContent.trim().length > 0), elHandle);
+        } catch { return false; }
+      };
+
+      // Type helper targeting a specific composer index reliably
+      const typeIntoComposer = async (index, text) => {
+        const safeText = toSafeTweet(text);
+        const area = await getTextareaForIndex(index, 15000);
+        if (!area) return false;
+        try { await area.evaluate(n => n.scrollIntoView({ block: 'center', inline: 'center' })); } catch {}
+        await area.click({ delay: 0 });
+        await delay(150);
+        // Focus via DOM as well
+        try { await this.page.evaluate(n => n.focus && n.focus(), area); } catch {}
+        await delay(50);
+        // Clear existing content (Ctrl+A + Backspace)
+        try {
+          await this.page.keyboard.down('Control');
+          await this.page.keyboard.press('KeyA');
+          await this.page.keyboard.up('Control');
+          await this.page.keyboard.press('Backspace');
+          await delay(50);
+        } catch {}
+        await area.type(safeText, { delay: 20 });
+        await delay(200);
+        const ok = await verifyTyped(area);
+        if (!ok) {
+          // Fallback: direct JS insertion
+          try {
+            await this.page.evaluate((node, val) => {
+              if (!node) return;
+              const setText = (n, v) => { n.textContent = v; };
+              setText(node, '');
+              setText(node, val);
+            }, area, safeText);
+          } catch {}
+          await delay(200);
+          return verifyTyped(area);
+        }
+        return true;
+      };
+
+      // Type the first tweet safely (enforce 280 chars)
+      {
+        const ok = await typeIntoComposer(0, tweets[0]);
+        if (!ok) {
+          logger.error('Failed to type into first composer');
+          return null;
+        }
+      }
+
+      // Build the rest of the thread, verifying each composer and enforcing 280 chars
       for (let i = 1; i < tweets.length; i++) {
         const before = await getComposerCount();
         const target = before + 1;
@@ -452,21 +505,21 @@ class TwitterClient {
           return null;
         }
 
-        // Wait for the ith textarea specifically
-        const area = await getTextareaForIndex(i, 10000);
-        if (!area) {
-          logger.error(`Cannot find textarea for tweet index ${i}`);
+        const typed = await typeIntoComposer(i, tweets[i]);
+        if (!typed) {
+          logger.error(`Failed to type into composer index ${i}`);
           return null;
         }
+      }
 
-        // Ensure it's focused and visible before typing
-        try {
-          await area.evaluate((node) => node.scrollIntoView({ block: 'center', inline: 'center' }));
-        } catch {}
-        await area.click({ delay: 0 });
-        await delay(250);
-        await area.type(tweets[i], { delay: 30 });
-        await delay(600);
+      // Pre-submit validation: ensure each composer has content
+      const perIndexLengths = await this.page.evaluate(() => {
+        const nodes = Array.from(document.querySelectorAll('[data-testid^="tweetTextarea_"]'));
+        return nodes.map(n => (n.textContent || '').trim().length);
+      }).catch(() => []);
+      if (perIndexLengths.length < tweets.length || perIndexLengths.some(len => len === 0)) {
+        logger.error('One or more composers are empty before submit', { lengths: perIndexLengths });
+        return null;
       }
 
       // Post the entire thread: prefer the main Tweet/Post button (Tweet all / Post)
@@ -501,6 +554,48 @@ class TwitterClient {
         await this.page.keyboard.up('Control');
       }
 
+      // If Post button was disabled due to content length, try to detect and auto-trim offending composer, then retry once
+      try {
+        const disabled = await this.page.$eval('[data-testid="tweetButton"], [data-testid="tweetButtonInline"]', n => n.getAttribute('aria-disabled') === 'true').catch(() => false);
+        if (disabled) {
+          logger.warn('Post button disabled before navigation; checking for over-limit content');
+          const idxOver = await this.page.evaluate(() => {
+            const areas = Array.from(document.querySelectorAll('[data-testid^="tweetTextarea_"]'));
+            const max = 280;
+            let offender = -1;
+            areas.forEach((n, i) => { const len = (n.textContent || '').trim().length; if (len > max && offender === -1) offender = i; });
+            return offender;
+          }).catch(() => -1);
+          if (idxOver >= 0 && idxOver < tweets.length) {
+            logger.warn(`Composer index ${idxOver} exceeds 280 chars; auto-trimming and retrying submit`);
+            const area = await getTextareaForIndex(idxOver, 5000);
+            if (area) {
+              try {
+                await area.click({ delay: 0 });
+                await delay(50);
+                await this.page.keyboard.down('Control');
+                await this.page.keyboard.press('KeyA');
+                await this.page.keyboard.up('Control');
+                await this.page.keyboard.press('Backspace');
+                await delay(80);
+                const safe = toSafeTweet(tweets[idxOver]);
+                await area.type(safe, { delay: 10 });
+                await delay(150);
+              } catch {}
+            }
+            // Retry submit via button or shortcut
+            const btn = await this.page.$('[data-testid="tweetButton"], [data-testid="tweetButtonInline"]');
+            if (btn) {
+              try { await btn.click(); } catch { try { await this.page.evaluate(n => n.click(), btn); } catch {} }
+            } else {
+              await this.page.keyboard.down('Control');
+              await this.page.keyboard.press('Enter');
+              await this.page.keyboard.up('Control');
+            }
+          }
+        }
+      } catch {}
+
       // Wait for navigation away from composer or composer closing
       await Promise.race([
         this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => null),
@@ -512,6 +607,10 @@ class TwitterClient {
       await delay(2000);
       const currentUrl = this.page.url();
       logger.info(`Current URL after posting: ${currentUrl}`);
+      try {
+        const lens = await this.page.evaluate(() => Array.from(document.querySelectorAll('[data-testid^="tweetTextarea_"]')).map(n => (n.textContent || '').trim().length));
+        logger.info('Composer lengths after submit attempt', { lengths: lens });
+      } catch {}
 
       // If still on composer page, the tweet was NOT posted
       if (currentUrl.includes('compose')) {
@@ -810,3 +909,4 @@ class TwitterClient {
 }
 
 module.exports = new TwitterClient();
+
