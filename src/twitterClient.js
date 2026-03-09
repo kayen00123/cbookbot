@@ -470,6 +470,34 @@ class TwitterClient {
         delay(7000)
       ]);
 
+      // Check if we got redirected (Twitter silently blocks by redirecting to home)
+      const afterUrl = this.page.url();
+      const pageTitleAfter = await this.page.evaluate(() => document.title);
+      logger.info(`DEBUG: After submit - URL: ${afterUrl}, Title: ${pageTitleAfter}`);
+      
+      // If redirected to home instead of staying on compose or going to status, tweets were silently blocked
+      if (afterUrl.includes('/home') || pageTitleAfter.includes('Home')) {
+        logger.error('Tweets were SILENTLY BLOCKED by Twitter! The page redirected to Home.');
+        logger.error('This happens when Twitter detects browser automation.');
+        return null;
+      }
+      
+      // Additional verification: go to profile and check if tweets appear
+      logger.info('Verifying tweets on profile...');
+      const username = process.env.TWITTER_USERNAME || 'newtrader4u';
+      await this.page.goto(`https://x.com/${username}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await delay(3000);
+      
+      // Check if our tweet content appears on profile
+      const threadContent = tweets.join(' ').substring(0, 100);
+      const profileContent = await this.page.evaluate(() => document.body.textContent);
+      
+      if (!profileContent.includes(threadContent.substring(0, 30))) {
+        logger.error('Tweets NOT found on profile! Verification FAILED.');
+        logger.error('Twitter silently blocked the tweets.');
+        return null;
+      }
+      
       logger.success(`Thread posted with ${tweets.length} tweets!`);
       return { success: true };
 
@@ -739,4 +767,3 @@ class TwitterClient {
 }
 
 module.exports = new TwitterClient();
-
