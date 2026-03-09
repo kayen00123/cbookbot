@@ -236,6 +236,41 @@ class TwitterClient {
       });
       await delay(6000); // Wait longer for composer to load
 
+      // DEBUG: Log page state
+      const currentUrl = this.page.url();
+      logger.info(`DEBUG: Current URL after navigate: ${currentUrl}`);
+      
+      // Check for any Twitter errors/alerts on page
+      const pageAlerts = await this.page.evaluate(() => {
+        const alerts = [];
+        // Check for error dialogs
+        const dialogs = document.querySelectorAll('div[role="dialog"]');
+        dialogs.forEach(d => {
+          if (d.textContent.toLowerCase().includes('error') || 
+              d.textContent.toLowerCase().includes('suspended') ||
+              d.textContent.toLowerCase().includes('locked')) {
+            alerts.push('ERROR DIALOG: ' + d.textContent.substring(0, 200));
+          }
+        });
+        // Check for toast notifications
+        const toasts = document.querySelectorAll('[data-testid="toast"], [role="alert"]');
+        toasts.forEach(t => alerts.push('TOAST: ' + t.textContent.substring(0, 100)));
+        // Check page title
+        alerts.push('Page title: ' + document.title);
+        return alerts;
+      });
+      logger.info('DEBUG: Page alerts:', pageAlerts);
+
+      // DEBUG: Count editable elements
+      const editableCount = await this.page.evaluate(() => {
+        return {
+          tweetTextarea: document.querySelectorAll('[data-testid^="tweetTextarea_"]').length,
+          contenteditable: document.querySelectorAll('[contenteditable="true"]').length,
+          roleTextbox: document.querySelectorAll('[role="textbox"]').length
+        };
+      });
+      logger.info('DEBUG: Element counts:', editableCount);
+
       // Utility: count how many tweet textareas exist
       const getComposerCount = async () => {
         return await this.page.evaluate(() => {
@@ -704,3 +739,4 @@ class TwitterClient {
 }
 
 module.exports = new TwitterClient();
+
