@@ -356,12 +356,54 @@ class TwitterClient {
     try {
       logger.info(`Posting thread with ${tweets.length} tweets...`);
 
-      // Open the dedicated composer and build the entire thread there
-      await this.page.goto('https://x.com/compose/post', {
+      // Try going to home first and clicking the new tweet button (more reliable)
+      await this.page.goto('https://x.com/home', {
         waitUntil: 'domcontentloaded',
-        timeout: 100000
+        timeout: 30000
       });
-      await delay(6000); // Wait longer for composer to load
+      await delay(3000);
+      
+      // Click the new tweet button
+      const newTweetBtnSelectors = [
+        '[data-testid="SideNav_NewTweet_Button"]',
+        '[data-testid="newTweetButton"]',
+        'a[href="/compose/tweet"]',
+        'a[href="/compose/post"]'
+      ];
+      
+      let clicked = false;
+      for (const sel of newTweetBtnSelectors) {
+        const btn = await this.page.$(sel);
+        if (btn) {
+          try {
+            await btn.click();
+            logger.info('Clicked new tweet button');
+            clicked = true;
+            break;
+          } catch {}
+        }
+      }
+      
+      // If button click failed, try going to compose URL directly
+      if (!clicked) {
+        logger.info('Button click failed, trying compose URL...');
+        await this.page.goto('https://x.com/compose/post', {
+          waitUntil: 'domcontentloaded',
+          timeout: 100000
+        });
+      }
+      
+      // Wait for composer to fully load with explicit wait
+      logger.info('Waiting for composer to load...');
+      await delay(8000);
+      
+      // Also wait for any contenteditable to appear
+      try {
+        await this.page.waitForSelector('[contenteditable="true"]', { timeout: 10000 });
+        logger.info('Composer element detected');
+      } catch {
+        logger.warn('Composer may not have loaded properly');
+      }
 
       // Utility: count how many tweet composer textboxes exist
       const getComposerCount = async () => {
