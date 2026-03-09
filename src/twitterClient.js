@@ -55,7 +55,16 @@ class TwitterClient {
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
-          '--disable-blink-features=AutomationControlled'
+          '--disable-blink-features=AutomationControlled',
+          '--disable-features=IsolateOrigins,site-per-process',
+          '--disable-web-security',
+          '--disable-extensions',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--metrics-recording-only',
+          '--no-first-run',
+          '--window-size=1920,1080',
+          '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         ]
       };
       
@@ -67,6 +76,9 @@ class TwitterClient {
       this.browser = await puppeteer.launch(launchOptions);
       
       this.page = await this.browser.newPage();
+      
+      // Set realistic viewport
+      await this.page.setViewport({ width: 1920, height: 1080 });
       
       // Try to load saved cookies
       if (hasCookies) {
@@ -88,14 +100,50 @@ class TwitterClient {
         });
         await delay(3000);
         
-        // Check if still logged in
+        // Check if still logged in - go to profile to verify
         const url = this.page.url();
-        if ((url.includes('x.com') || url.includes('twitter.com')) && url.includes('/home') && !url.includes('/login')) {
-          logger.success('Logged in using saved cookies!');
-          this.isInitialized = true;
-          return true;
+        logger.info('Current URL after loading cookies:', url);
+        
+        // Navigate to profile to properly load the session
+        const username = process.env.TWITTER_USERNAME || 'newtrader4u';
+        await this.page.goto('https://x.com/' + username, {
+          waitUntil: 'domcontentloaded',
+          timeout: 30000
+        });
+        await delay(2000);
+        
+        const profileUrl = this.page.url();
+        logger.info('Profile URL:', profileUrl);
+        
+        // Check if we're actually logged in (not on login page)
+        if (!profileUrl.includes('/login') && !profileUrl.includes('login')) {
+          // Additional check: verify we can see the username in the page
+          const pageContent = await this.page.content();
+          if (pageContent.includes(username)) {
+            logger.success('Cookie validation passed - session is valid');
+            this.isInitialized = true;
+            return true;
+          } else {
+            logger.warn('Cookie session may be invalid - username not found on page');
+          }
         } else {
-          logger.warn('Cookies expired, need to login again');
+          logger.error('==============================================');
+          logger.error('COOKIES ARE INVALID OR EXPIRED!');
+          logger.error('==============================================');
+          logger.error('This is expected when running on fly.io - cookies from your local machine');
+          logger.error('typically dont work due to different IP addresses.');
+          logger.error('');
+          logger.error('SOLUTION:');
+          logger.error('1. You need to set up Twitter cookies directly on the server OR');
+          logger.error('2. Use Twitter API instead of browser automation');
+          logger.error('3. For fly.io, you may need a VPN/proxy to match your local IP');
+          logger.error('');
+          logger.error('To get new cookies:');
+          logger.error('- Run locally: node src/index.js');
+          logger.error('- Login manually when prompted');
+          logger.error('- Copy the new twitter_cookies.json to fly.io');
+          logger.error('- Or set TWITTER_COOKIES as a base64-encoded secret in fly.io');
+          logger.error('==============================================');
         }
       }
 
@@ -282,6 +330,17 @@ class TwitterClient {
         logger.error('Tweet may not have posted (no status URL and composer still present)');
         return null;
       }
+      
+      // CRITICAL: Verify tweet actually appears on profile
+      logger.info('Verifying tweet was actually posted...');
+      const verified = await this.verifyTweetPosted(text);
+      
+      if (!verified) {
+        logger.error('Tweet verification FAILED - tweet may have been silently blocked by Twitter');
+        logger.error('This often happens on fly.io due to: IP mismatch, cookie invalidation, or bot detection');
+        return null;
+      }
+      
       logger.success('Tweet posted!');
       return { success: true };
       
@@ -626,12 +685,84 @@ class TwitterClient {
         }
       }
 
+      // CRITICAL: Verify thread actually appears on profile
+      logger.info('Verifying thread was actually posted...');
+      const threadText = tweets.join(' ');
+      const verified = await this.verifyTweetPosted(threadText);
+      
+      if (!verified) {
+        logger.error('Thread verification FAILED - thread may have been silently blocked by Twitter');
+        logger.error('This often happens on fly.io due to: IP mismatch, cookie invalidation, or bot detection');
+        return null;
+      }
+
       logger.success(`Thread posted with ${tweets.length} tweets!`);
       return { success: true };
 
     } catch (error) {
       logger.error('Failed to post thread', { error: error.message });
       return null;
+    }
+  }
+
+  // Verify tweet was actually posted by checking profile
+  async verifyTweetPosted(expectedText) {
+    try {
+      const username = process.env.TWITTER_USERNAME || 'newtrader4u';
+      if (!username) {
+        logger.warn('No username configured, skipping verification');
+        return true;
+      }
+      
+      // Go to profile to check recent tweets
+      await this.page.goto(`https://x.com/${username}`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000
+      });
+      await delay(3000);
+      
+      // Get recent tweets from the page
+      const recentTweets = await this.page.evaluate(() => {
+        const tweets = [];
+        const tweetSelectors = [
+          '[data-testid="tweet"]',
+          'article[data-testid="tweet"]',
+          '.css-175oi2z.r-1habvwh.r-18u37iz.r-1ny4l3l'
+        ];
+        
+        for (const selector of tweetSelectors) {
+          const elements = document.querySelectorAll(selector);
+          if (elements.length > 0) {
+            elements.forEach(el => {
+              const text = el.textContent || '';
+              if (text.length > 10) {
+                tweets.push(text);
+              }
+            });
+            break;
+          }
+        }
+        return tweets.slice(0, 5);
+      });
+      
+      logger.info(`Found ${recentTweets.length} recent tweets on profile`);
+      
+      // Check if any of the recent tweets contains our expected text
+      const textToCheck = expectedText.substring(0, 50).toLowerCase();
+      
+      for (const tweet of recentTweets) {
+        if (tweet.toLowerCase().includes(textToCheck)) {
+          logger.success('Tweet verified on profile!');
+          return true;
+        }
+      }
+      
+      logger.warn('Tweet not found on profile - it may have been silently blocked');
+      return false;
+      
+    } catch (error) {
+      logger.error('Error verifying tweet', { error: error.message });
+      return false;
     }
   }
 
