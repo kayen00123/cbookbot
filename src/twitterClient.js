@@ -340,16 +340,18 @@ class TwitterClient {
         return await this.page.waitForSelector('[data-testid="tweetTextarea"], [contenteditable="true"]', { timeout }).catch(() => null);
       };
 
-      // Type the first tweet
+      // Type the first tweet with human-like delays
       const firstArea = await getTextareaForIndex(0, 15000);
       if (!firstArea) {
         logger.error('Cannot find first textarea for thread');
         return null;
       }
-      await firstArea.click({ delay: 0 });
-      await delay(500);
-      await firstArea.type(tweets[0], { delay: 30 });
-      await delay(1200);
+      await firstArea.click({ delay: Math.floor(Math.random() * 100) });
+      await delay(500 + Math.random() * 500);
+      // Type with variable delay
+      const typeDelay = () => Math.floor(Math.random() * 50) + 20;
+      await firstArea.type(trimmedTweets[0], { delay: typeDelay() });
+      await delay(1000 + Math.random() * 500);
 
       // Robust click helper with retries + scroll + DOM validation
       const clickAddWithRetry = async (targetCount, expectedIndex) => {
@@ -447,10 +449,11 @@ class TwitterClient {
         try {
           await area.evaluate((node) => node.scrollIntoView({ block: 'center', inline: 'center' }));
         } catch {}
-        await area.click({ delay: 0 });
-        await delay(250);
-        await area.type(tweets[i], { delay: 30 });
-        await delay(600);
+        await area.click({ delay: Math.floor(Math.random() * 100) });
+        await delay(200 + Math.random() * 300);
+        const typeDelay = () => Math.floor(Math.random() * 50) + 20;
+        await area.type(trimmedTweets[i], { delay: typeDelay() });
+        await delay(500 + Math.random() * 500);
       }
 
        // Post the entire thread: prefer the main Tweet/Post button (Tweet all / Post)
@@ -476,9 +479,19 @@ class TwitterClient {
           }
           
           logger.info('Submitting thread...');
-          // Ensure it's scrolled into view, then click
+          // Scroll to button
           try { await btn.evaluate((n) => n.scrollIntoView({ block: 'center' })); } catch {}
-          await delay(300);
+          await delay(500);
+          
+          // Move mouse randomly before clicking (human-like behavior)
+          const box = await btn.boundingBox();
+          if (box) {
+            const randomX = box.x + Math.random() * box.width;
+            const randomY = box.y + Math.random() * box.height;
+            await this.page.mouse.move(randomX, randomY);
+            await delay(300);
+          }
+          
           // Wait for button to be fully interactive
           await this.page.waitForFunction(
             (selector) => {
@@ -488,10 +501,15 @@ class TwitterClient {
             { timeout: 10000 },
             sel
           ).catch(() => null);
+          
+          // Click with slight delay (human-like)
           try { 
-            await btn.click({ delay: 100 }); 
+            await btn.click({ delay: Math.floor(Math.random() * 200) + 100 }); 
           } catch { 
-            await this.page.evaluate((n) => n.click(), btn).catch(() => {}); 
+            // Try JavaScript click as fallback
+            await this.page.evaluate((n) => {
+              n.click();
+            }, btn).catch(() => {}); 
           }
           posted = true;
           break;
@@ -499,11 +517,14 @@ class TwitterClient {
       }
 
       if (!posted) {
-        logger.warn('Post button not found; attempting Ctrl+Enter to submit thread');
-        await this.page.keyboard.down('Control');
+        logger.warn('Post button not found; attempting keyboard submit...');
+        // Try different keyboard shortcuts
+        await delay(500);
         await this.page.keyboard.press('Enter');
-        await this.page.keyboard.up('Control');
+        await delay(200);
       }
+      
+      await delay(2000); // Wait for potential navigation
 
       // Wait for the post to complete
       await Promise.race([
