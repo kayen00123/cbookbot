@@ -80,7 +80,7 @@ class AIClient {
 Create a ${numTweets}-tweet thread about: ${topic}
 
 Style requirements:
-- Keep each tweet under 200 characters
+- Keep each tweet UNDER 250 characters (including spaces, emojis, hashtags, all characters)
 - Use line breaks within tweets (like paragraphs)
 - Leave empty line between paragraphs in same tweet
 - Be concise and impactful
