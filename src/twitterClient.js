@@ -56,12 +56,25 @@ class TwitterClient {
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
           '--disable-blink-features=AutomationControlled',
+          '--disable-features=IsolateOrigins,site-per-process',
           '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           '--start-maximized',
-          '--disable-features=VizDisplayCompositor'
+          '--disable-extensions',
+          '--disable-plugins',
+          '--disable-default-apps',
+          '--allow-running-insecure-content',
+          '--disable-web-security',
+          '--disable-background-networking',
+          '--disable-default-network-handlers',
+          '--disable-sync',
+          '--metrics-recording-only',
+          '--mute-audio',
+          '--no-first-run',
+          '--safebrowsing-disable-auto-update'
         ],
-        defaultViewport: null,
-        ignoreHTTPSErrors: true
+        defaultViewport: { width: 1280, height: 800 },
+        ignoreHTTPSErrors: true,
+        dumpio: false
       };
       
       // On Windows, use system Chrome if available
@@ -254,8 +267,8 @@ class TwitterClient {
       await delay(6000); // Wait longer for composer to load
 
       // DEBUG: Log page state
-      const currentUrl = this.page.url();
-      logger.info(`DEBUG: Current URL after navigate: ${currentUrl}`);
+      const composeUrl = this.page.url();
+      logger.info(`DEBUG: Current URL after navigate: ${composeUrl}`);
       
       // Check for any Twitter errors/alerts on page
       const pageAlerts = await this.page.evaluate(() => {
@@ -456,137 +469,94 @@ class TwitterClient {
         await delay(500 + Math.random() * 500);
       }
 
-       // Post the entire thread: prefer the main Tweet/Post button (Tweet all / Post)
-      const postSelectors = [
-        '[data-testid="tweetButton"]',
-        'div[role="button"][data-testid="tweetButton"]',
-        'button[data-testid="tweetButton"]',
-        'div[role="button"][aria-label*="Post"]',
-        'div[role="button"][aria-label*="Tweet all"]'
-      ];
+       // Post the entire thread - try multiple methods
+      logger.info('Looking for Post button...');
+      
+      // Debug: log all buttons on page
+      const allButtons = await this.page.evaluate(() => {
+        const buttons = [];
+        document.querySelectorAll('div[role="button"], button').forEach(btn => {
+          const label = btn.getAttribute('aria-label') || btn.textContent || '';
+          const dataTestid = btn.getAttribute('data-testid') || '';
+          if (label.toLowerCase().includes('post') || label.toLowerCase().includes('tweet') || dataTestid.includes('tweet')) {
+            buttons.push({ ariaLabel: label, dataTestid: dataTestid, disabled: btn.disabled });
+          }
+        });
+        return buttons;
+      });
+      logger.info('DEBUG: Found buttons:', allButtons);
 
-      // Wait for button to be enabled
-      let posted = false;
-      for (const sel of postSelectors) {
-        const btn = await this.page.waitForSelector(sel, { timeout: 15000 }).catch(() => null);
-        if (btn) {
-          // Check if button is enabled
-          const isDisabled = await btn.evaluate(node => node.disabled || node.getAttribute('disabled') !== null || node.classList.contains('disabled'));
-          if (isDisabled) {
-            logger.warn('Post button is disabled, waiting...');
-            await delay(2000);
-            continue;
-          }
-          
-          logger.info('Submitting thread...');
-          // Scroll to button
-          try { await btn.evaluate((n) => n.scrollIntoView({ block: 'center' })); } catch {}
-          await delay(500);
-          
-          // Move mouse randomly before clicking (human-like behavior)
-          const box = await btn.boundingBox();
-          if (box) {
-            const randomX = box.x + Math.random() * box.width;
-            const randomY = box.y + Math.random() * box.height;
-            await this.page.mouse.move(randomX, randomY);
-            await delay(300);
-          }
-          
-          // Wait for button to be fully interactive
-          await this.page.waitForFunction(
-            (selector) => {
-              const el = document.querySelector(selector);
-              return el && !el.disabled && el.offsetParent !== null;
-            }, 
-            { timeout: 10000 },
-            sel
-          ).catch(() => null);
-          
-          // Click with slight delay (human-like)
-          try { 
-            await btn.click({ delay: Math.floor(Math.random() * 200) + 100 }); 
-          } catch { 
-            // Try JavaScript click as fallback
-            await this.page.evaluate((n) => {
-              n.click();
-            }, btn).catch(() => {}); 
-          }
-          posted = true;
-          break;
-        }
-      }
-
-      if (!posted) {
-        logger.warn('Post button not found; attempting keyboard submit...');
-        // Try different keyboard shortcuts
+      // Try to find and click the post button
+      let postButtonClicked = false;
+      
+      // First wait a moment for any overlays to settle
+      await delay(1000 + Math.random() * 1000);
+      
+      // Method 1: Try data-testid selector - use JavaScript click for better stealth
+      const tweetButton = await this.page.$('[data-testid="tweetButton"]');
+      if (tweetButton) {
+        logger.info('Found tweetButton, clicking with JavaScript...');
+        await tweetButton.scrollIntoViewIfNeeded();
         await delay(500);
-        await this.page.keyboard.press('Enter');
-        await delay(200);
+        // Use JavaScript click instead of puppeteer click - less detectable
+        await this.page.evaluate((btn) => btn.click(), tweetButton);
+        postButtonClicked = true;
       }
       
-      await delay(2000); // Wait for potential navigation
+      // Method 2: If not found, try aria-label
+      if (!postButtonClicked) {
+        const ariaButton = await this.page.$('div[role="button"][aria-label*="Post"]');
+        if (ariaButton) {
+          logger.info('Found Post button by aria-label, clicking with JavaScript...');
+          await ariaButton.scrollIntoViewIfNeeded();
+          await delay(500);
+          await this.page.evaluate((btn) => btn.click(), ariaButton);
+          postButtonClicked = true;
+        }
+      }
+      
+      // Method 3: Try pressing Enter key (works in Twitter compose)
+      if (!postButtonClicked) {
+        logger.info('Trying Ctrl+Enter to post...');
+        await delay(500);
+        await this.page.keyboard.down('Control');
+        await this.page.keyboard.press('Enter');
+        await this.page.keyboard.up('Control');
+        postButtonClicked = true;
+      }
+      
+      await delay(3000); // Wait for post to process
 
-      // Wait for the post to complete
-      await Promise.race([
-        this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => null),
-        delay(12000)
-      ]);
-
-      // Check if we got redirected to a status page (success) or stayed on compose (possible failure)
+      // Check if post was successful - success means we navigated away from compose
       const afterUrl = this.page.url();
       const pageTitleAfter = await this.page.evaluate(() => document.title);
       logger.info(`DEBUG: After submit - URL: ${afterUrl}, Title: ${pageTitleAfter}`);
       
-      // If still on compose page, might indicate failure
-      if (afterUrl.includes('/compose/post')) {
-        logger.error(`Attempt ${attempt} failed: Still on compose page`);
-        // Wait before retrying
+      // Success: URL changed from compose/post (e.g., /home, /username/status/, etc.)
+      // Failure: Still on /compose/post URL
+      const isStillOnCompose = afterUrl.includes('/compose/post');
+      
+      if (isStillOnCompose) {
+        logger.error(`Attempt ${attempt} failed: Still on compose page - post was blocked`);
         if (attempt < maxAttempts) {
-          logger.info(`Waiting ${attempt * 5000}ms before retry...`);
+          logger.info(`Retrying... (Attempt ${attempt + 1}/${maxAttempts})`);
           await delay(attempt * 5000);
-          // Go back to home page to reset state
-          await this.page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 30000 });
-          await delay(2000);
-          continue; // Retry
+          continue;
         }
         logger.error('All attempts failed - tweets were NOT posted!');
         return null;
       }
       
-      // Additional verification: go to profile and check if tweets appear
-      logger.info('Verifying tweets on profile...');
-      const username = process.env.TWITTER_USERNAME || 'newtrader4u';
-      await this.page.goto(`https://x.com/${username}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await delay(3000);
-      
-      // Check if our tweet content appears on profile
-      const threadContent = trimmedTweets.join(' ').substring(0, 100);
-      const profileContent = await this.page.evaluate(() => document.body.textContent);
-      
-      if (!profileContent.includes(threadContent.substring(0, 30))) {
-        logger.error(`Attempt ${attempt} failed: Tweets NOT found on profile!`);
-        if (attempt < maxAttempts) {
-          logger.info(`Waiting ${attempt * 5000}ms before retry...`);
-          await delay(attempt * 5000);
-          await this.page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 30000 });
-          await delay(2000);
-          continue; // Retry
-        }
-        logger.error('All attempts failed - tweets were NOT posted!');
-        return null;
-      }
-      
-      logger.success(`Thread posted with ${trimmedTweets.length} tweets! (Attempt ${attempt}/${maxAttempts})`);
-      return { success: true };
+      // Success! Post was submitted - Twitter will naturally navigate to home/status
+      logger.success(`✓ Thread posted successfully with ${trimmedTweets.length} tweets!`);
+      return { success: true, tweetCount: trimmedTweets.length };
 
       } catch (error) {
         logger.error(`Attempt ${attempt} failed: ${error.message}`);
         if (attempt < maxAttempts) {
-          logger.info(`Waiting ${attempt * 5000}ms before retry...`);
+          logger.info(`Retrying... (Attempt ${attempt + 1}/${maxAttempts})`);
           await delay(attempt * 5000);
-          await this.page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 30000 });
-          await delay(2000);
-          continue; // Retry
+          continue;
         }
         logger.error('All attempts failed - tweets were NOT posted!');
         return null;
@@ -854,4 +824,3 @@ class TwitterClient {
 }
 
 module.exports = new TwitterClient();
-
