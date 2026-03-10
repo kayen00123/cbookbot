@@ -229,69 +229,68 @@ class TwitterClient {
     try {
       logger.info(`Posting thread with ${tweets.length} tweets...`);
 
-      // Helper to check if we're on compose page
-      const isOnComposePage = async () => {
-        const url = this.page.url();
-        const title = await this.page.evaluate(() => document.title);
-        return url.includes('/compose/post') && !title.includes('Home');
+      // Open the dedicated composer and build the entire thread there
+      await this.page.goto('https://twitter.com/compose/tweet', {
+        waitUntil: 'domcontentloaded',
+        timeout: 100000
+      });
+      await delay(6000); // Wait longer for composer to load
+
+      // Dismiss overlays and ensure a visible textbox is present
+      const dismissOverlays = async () => {
+        try {
+          await this.page.evaluate(() => {
+            const dlg = document.querySelector('div[role="dialog"], [aria-modal="true"]');
+            if (dlg) {
+              const btn = dlg.querySelector('[data-testid="confirmationSheetCancel"], [data-testid="app-bar-close"], [data-testid*="close"], [role="button"]');
+              if (btn && typeof btn.click === 'function') btn.click();
+            }
+            const toast = document.querySelector('[data-testid="toast"], [role="alert"]');
+            if (toast && toast.parentNode) toast.parentNode.removeChild(toast);
+          });
+          try { await this.page.keyboard.press('Escape'); } catch {}
+        } catch {}
       };
 
-      // Try to navigate to compose page with retries
-      let composeLoaded = false;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        logger.info(`Navigate to compose page - attempt ${attempt}`);
-        await this.page.goto('https://twitter.com/compose/post', {
-          waitUntil: 'networkidle2',
-          timeout: 60000
-        });
-        await delay(5000);
-        
-        // Wait for page to actually load compose
+      const waitForVisibleTextbox = async (timeout = 15000) => {
         try {
-          await this.page.waitForSelector('[data-testid="tweetTextarea_0"]', { timeout: 10000 });
-          const onCompose = await isOnComposePage();
-          if (onCompose) {
-            composeLoaded = true;
-            logger.info('Successfully on compose page!');
-            break;
-          }
-        } catch {}
-        
-        logger.warn(`Attempt ${attempt} failed to load compose page properly`);
-        await delay(3000);
-      }
+          await this.page.waitForFunction(() => {
+            const sels = [
+              'div[aria-label="Post text"][role="textbox"]',
+              '[data-testid^="tweetTextarea_"] div[contenteditable="true"][role="textbox"]',
+              '[contenteditable="true"][role="textbox"]',
+              'div[role="textbox"][contenteditable="true"]'
+            ];
+            const visible = (n) => {
+              const r = n.getBoundingClientRect();
+              const st = window.getComputedStyle(n);
+              return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
+            };
+            for (const s of sels) {
+              const nodes = document.querySelectorAll(s);
+              if (nodes && nodes.length) {
+                for (const n of nodes) { if (visible(n)) return true; }
+              }
+            }
+            return false;
+          }, { timeout });
+          return true;
+        } catch { return false; }
+      };
 
-      if (!composeLoaded) {
-        logger.error('Could not load compose page after 3 attempts');
-        return null;
+      await dismissOverlays();
+      const textboxReady = await waitForVisibleTextbox(15000);
+      if (!textboxReady) {
+        logger.warn('Composer may not have loaded properly (no visible textbox)');
+      } else {
+        logger.info('Composer element detected');
       }
-
-      await delay(3000);
 
       // DEBUG: Log page state
       const currentUrl = this.page.url();
+      const pageTitle = await this.page.evaluate(() => document.title);
       logger.info(`DEBUG: Current URL after navigate: ${currentUrl}`);
-      
-      // Check for any Twitter errors/alerts on page
-      const pageAlerts = await this.page.evaluate(() => {
-        const alerts = [];
-        // Check for error dialogs
-        const dialogs = document.querySelectorAll('div[role="dialog"]');
-        dialogs.forEach(d => {
-          if (d.textContent.toLowerCase().includes('error') || 
-              d.textContent.toLowerCase().includes('suspended') ||
-              d.textContent.toLowerCase().includes('locked')) {
-            alerts.push('ERROR DIALOG: ' + d.textContent.substring(0, 200));
-          }
-        });
-        // Check for toast notifications
-        const toasts = document.querySelectorAll('[data-testid="toast"], [role="alert"]');
-        toasts.forEach(t => alerts.push('TOAST: ' + t.textContent.substring(0, 100)));
-        // Check page title
-        alerts.push('Page title: ' + document.title);
-        return alerts;
-      });
-      logger.info('DEBUG: Page alerts:', pageAlerts);
+      logger.info(`DEBUG: Page title: ${pageTitle}`);
 
       // DEBUG: Count editable elements
       const editableCount = await this.page.evaluate(() => {
@@ -303,56 +302,110 @@ class TwitterClient {
       });
       logger.info('DEBUG: Element counts:', editableCount);
 
+      // If routed to Home without numbered composer, re-click New Tweet button once
+      try {
+        const needReopen = await this.page.evaluate(() => {
+          const has0 = !!document.querySelector('[data-testid="tweetTextarea_0"]');
+          return document.title.includes('Home / X') && !has0;
+        });
+        if (needReopen) {
+          logger.warn('Compose appears routed to Home without active textbox; re-clicking New Tweet button...');
+          const sels = ['[data-testid="SideNav_NewTweet_Button"]', '[data-testid="newTweetButton"]', 'a[href="/compose/tweet"]', 'a[href="/compose/post"]'];
+          for (const sel of sels) {
+            const btn = await this.page.$(sel);
+            if (!btn) continue;
+            try { await btn.click(); } catch { try { await this.page.evaluate(n => n.click(), btn); } catch {} }
+            await delay(800);
+            await dismissOverlays();
+            if (await waitForVisibleTextbox(8000)) break;
+          }
+        }
+      } catch {}
+
       // Utility: count how many tweet textareas exist
       const getComposerCount = async () => {
         return await this.page.evaluate(() => {
-          return document.querySelectorAll('[data-testid^="tweetTextarea_"]').length || 0;
+          const sels = [
+            '[data-testid^="tweetTextarea_"] div[role="textbox"]',
+            '[data-testid^="tweetTextarea_"]',
+            'div[role="textbox"]'
+          ];
+          for (const s of sels) {
+            const n = document.querySelectorAll(s).length;
+            if (n > 0) return n;
+          }
+          return 0;
         });
       };
 
       // Utility: wait until composer count becomes expected
       const waitForComposerCount = async (expected, timeout = 10000) => {
-        return await this.page.waitForFunction(
-          (sel, expectedCount) => document.querySelectorAll(sel).length >= expectedCount,
-          { timeout },
+        const sels = [
+          '[data-testid^="tweetTextarea_"] div[role="textbox"]',
           '[data-testid^="tweetTextarea_"]',
-          expected
-        ).catch(() => null);
+          'div[role="textbox"]'
+        ];
+        const perSelTimeout = Math.max(1000, Math.floor(timeout / sels.length));
+        for (const s of sels) {
+          const ok = await this.page.waitForFunction(
+            (selector, expectedCount) => document.querySelectorAll(selector).length >= expectedCount,
+            { timeout: perSelTimeout },
+            s,
+            expected
+          ).then(() => true).catch(() => false);
+          if (ok) return true;
+        }
+        return false;
       };
 
       // Helper to get a textarea for a specific index in the thread
-      const getTextareaForIndex = async (i, timeout = 15000) => {
-        // More robust selector list for Twitter's composer
-        const selectors = [
+      const getTextareaForIndex = async (i, timeout = 20000) => {
+        const selectorGroups = [
+          '[data-testid^="tweetTextarea_"] div[contenteditable="true"][role="textbox"]',
           `[data-testid="tweetTextarea_${i}"]`,
-          `[data-testid="tweetTextarea_0"]`,
-          '[data-testid="tweetTextarea"]',
+          '[data-testid^="tweetTextarea_"]',
+          'div[aria-label="Post text"][role="textbox"]',
+          'div[role="textbox"][contenteditable="true"]',
           '[contenteditable="true"][role="textbox"]',
-          '[contenteditable="true"]',
-          'div[role="textbox"]'
+          'div[contenteditable="true"]'
         ];
-        
-        // First try direct selector
-        for (const sel of selectors) {
-          const area = await this.page.$(sel);
-          if (area) {
-            logger.info(`Found textarea using selector: ${sel}`);
-            return area;
+        const isVisible = async (handle) => {
+          try {
+            return await this.page.evaluate((n) => {
+              const r = n.getBoundingClientRect();
+              const st = window.getComputedStyle(n);
+              return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
+            }, handle);
+          } catch { return false; }
+        };
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+          for (const sel of selectorGroups) {
+            const nodes = await this.page.$(sel).catch(() => []);
+            if (nodes && nodes.length) {
+              let handle = null;
+              if (sel === `[data-testid="tweetTextarea_${i}"]` || sel.startsWith('[data-testid^="tweetTextarea_"')) {
+                const idx = Math.min(i, nodes.length - 1);
+                handle = nodes[idx];
+                const inner = await handle.$('div[contenteditable="true"][role="textbox"], div[role="textbox"], div[contenteditable="true"]').catch(() => null);
+                if (inner) handle = inner;
+              } else {
+                handle = nodes.length > i ? nodes[i] : nodes[nodes.length - 1];
+              }
+              if (handle && await isVisible(handle)) {
+                logger.info(`Found textarea using selector: ${sel}`);
+                return handle;
+              }
+            }
           }
+          try {
+            const any = await this.page.$('div[aria-label="Post text"][role="textbox"], div[role="textbox"], div[contenteditable="true"]').catch(() => []);
+            if (any && any.length) { try { await any[any.length - 1].click({ delay: 0 }); } catch {} }
+          } catch {}
+          await delay(300);
         }
-        
-        // Wait and try again
-        await delay(2000);
-        for (const sel of selectors) {
-          const area = await this.page.$(sel);
-          if (area) {
-            logger.info(`Found textarea after wait using selector: ${sel}`);
-            return area;
-          }
-        }
-        
-        // Last resort - wait for any textarea
-        return await this.page.waitForSelector('[data-testid="tweetTextarea"], [contenteditable="true"]', { timeout }).catch(() => null);
+        logger.warn('Could not find visible textarea for requested index');
+        return null;
       };
 
       // Type the first tweet
@@ -468,9 +521,21 @@ class TwitterClient {
         await delay(600);
       }
 
+      // Pre-submit validation: ensure each composer has content
+      try {
+        const lengths = await this.page.evaluate(() => {
+          const sel = '[data-testid^="tweetTextarea_"] div[contenteditable="true"][role="textbox"], [data-testid^="tweetTextarea_"] [contenteditable="true"][role="textbox"], div[aria-label="Post text"][role="textbox"], div[role="textbox"]';
+          return Array.from(document.querySelectorAll(sel)).map(n => (n.textContent || '').trim().length);
+        });
+        if (!lengths || lengths.filter(n => n > 0).length < tweets.length) {
+          logger.warn('Some composers appear empty before submit', { lengths });
+        }
+      } catch {}
+
       // Post the entire thread: prefer the main Tweet/Post button (Tweet all / Post)
       const postSelectors = [
         '[data-testid="tweetButton"]',
+        '[data-testid="tweetButtonInline"]',
         'div[role="button"][data-testid="tweetButton"]',
         'button[data-testid="tweetButton"]'
       ];
@@ -799,4 +864,5 @@ class TwitterClient {
 }
 
 module.exports = new TwitterClient();
+
 
