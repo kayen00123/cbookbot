@@ -48,15 +48,20 @@ class TwitterClient {
       // Detect if running on Linux (fly.io) or Windows
       const isLinux = process.platform === 'linux';
       
-      // Launch Chrome - use bundled Chromium for cross-platform
+       // Launch Chrome - use bundled Chromium for cross-platform
       const launchOptions = {
         headless: isLinux ? true : false,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
-          '--disable-blink-features=AutomationControlled'
-        ]
+          '--disable-blink-features=AutomationControlled',
+          '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          '--start-maximized',
+          '--disable-features=VizDisplayCompositor'
+        ],
+        defaultViewport: null,
+        ignoreHTTPSErrors: true
       };
       
       // On Windows, use system Chrome if available
@@ -436,22 +441,46 @@ class TwitterClient {
         await delay(600);
       }
 
-      // Post the entire thread: prefer the main Tweet/Post button (Tweet all / Post)
+       // Post the entire thread: prefer the main Tweet/Post button (Tweet all / Post)
       const postSelectors = [
         '[data-testid="tweetButton"]',
         'div[role="button"][data-testid="tweetButton"]',
-        'button[data-testid="tweetButton"]'
+        'button[data-testid="tweetButton"]',
+        'div[role="button"][aria-label*="Post"]',
+        'div[role="button"][aria-label*="Tweet all"]'
       ];
 
+      // Wait for button to be enabled
       let posted = false;
       for (const sel of postSelectors) {
-        const btn = await this.page.waitForSelector(sel, { timeout: 12000 }).catch(() => null);
+        const btn = await this.page.waitForSelector(sel, { timeout: 15000 }).catch(() => null);
         if (btn) {
+          // Check if button is enabled
+          const isDisabled = await btn.evaluate(node => node.disabled || node.getAttribute('disabled') !== null || node.classList.contains('disabled'));
+          if (isDisabled) {
+            logger.warn('Post button is disabled, waiting...');
+            await delay(2000);
+            continue;
+          }
+          
           logger.info('Submitting thread...');
           // Ensure it's scrolled into view, then click
           try { await btn.evaluate((n) => n.scrollIntoView({ block: 'center' })); } catch {}
-          await delay(150);
-          try { await btn.click(); } catch { await this.page.evaluate((n) => n.click(), btn).catch(() => {}); }
+          await delay(300);
+          // Wait for button to be fully interactive
+          await this.page.waitForFunction(
+            (selector) => {
+              const el = document.querySelector(selector);
+              return el && !el.disabled && el.offsetParent !== null;
+            }, 
+            { timeout: 10000 },
+            sel
+          ).catch(() => null);
+          try { 
+            await btn.click({ delay: 100 }); 
+          } catch { 
+            await this.page.evaluate((n) => n.click(), btn).catch(() => {}); 
+          }
           posted = true;
           break;
         }
@@ -468,6 +497,12 @@ class TwitterClient {
       await Promise.race([
         this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => null),
         delay(7000)
+      ]);
+
+      // Wait for the post to complete
+      await Promise.race([
+        this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => null),
+        delay(12000)
       ]);
 
       // Check if we got redirected to a status page (success) or stayed on compose (possible failure)
@@ -767,5 +802,4 @@ class TwitterClient {
 }
 
 module.exports = new TwitterClient();
-
 
