@@ -43,5 +43,8 @@ RUN npm install
 # Copy application
 COPY . .
 
+# Fix permissions and ensure chromium is executable
+RUN chmod +x /usr/bin/chromium
+
 # Start the bot
 CMD ["node", "src/index.js"]
