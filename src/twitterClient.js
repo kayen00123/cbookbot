@@ -231,8 +231,20 @@ class TwitterClient {
   async postThread(tweets) {
     if (!this.isInitialized) return null;
 
-    try {
-      logger.info(`Posting thread with ${tweets.length} tweets...`);
+    // Limit each tweet to 250 characters
+    const trimmedTweets = tweets.map(tweet => {
+      if (tweet.length > 250) {
+        logger.warn(`Tweet truncated to 250 characters: "${tweet.substring(0, 50)}..."`);
+        return tweet.substring(0, 247) + '...';
+      }
+      return tweet;
+    });
+
+    // Retry mechanism: up to 5 attempts
+    const maxAttempts = 5;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        logger.info(`Posting thread with ${trimmedTweets.length} tweets... (Attempt ${attempt}/${maxAttempts})`);
 
       // Open the dedicated composer and build the entire thread there
       await this.page.goto('https://x.com/compose/post', {
@@ -493,12 +505,6 @@ class TwitterClient {
         await this.page.keyboard.up('Control');
       }
 
-      // Wait for navigation away from composer or a short settle time
-      await Promise.race([
-        this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => null),
-        delay(7000)
-      ]);
-
       // Wait for the post to complete
       await Promise.race([
         this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => null),
@@ -512,8 +518,17 @@ class TwitterClient {
       
       // If still on compose page, might indicate failure
       if (afterUrl.includes('/compose/post')) {
-        logger.error('Tweets were NOT posted! Still on compose page.');
-        logger.error('This happens when Twitter detects automation or blocks the post.');
+        logger.error(`Attempt ${attempt} failed: Still on compose page`);
+        // Wait before retrying
+        if (attempt < maxAttempts) {
+          logger.info(`Waiting ${attempt * 5000}ms before retry...`);
+          await delay(attempt * 5000);
+          // Go back to home page to reset state
+          await this.page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await delay(2000);
+          continue; // Retry
+        }
+        logger.error('All attempts failed - tweets were NOT posted!');
         return null;
       }
       
@@ -524,22 +539,38 @@ class TwitterClient {
       await delay(3000);
       
       // Check if our tweet content appears on profile
-      const threadContent = tweets.join(' ').substring(0, 100);
+      const threadContent = trimmedTweets.join(' ').substring(0, 100);
       const profileContent = await this.page.evaluate(() => document.body.textContent);
       
       if (!profileContent.includes(threadContent.substring(0, 30))) {
-        logger.error('Tweets NOT found on profile! Verification FAILED.');
-        logger.error('Twitter silently blocked the tweets.');
+        logger.error(`Attempt ${attempt} failed: Tweets NOT found on profile!`);
+        if (attempt < maxAttempts) {
+          logger.info(`Waiting ${attempt * 5000}ms before retry...`);
+          await delay(attempt * 5000);
+          await this.page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await delay(2000);
+          continue; // Retry
+        }
+        logger.error('All attempts failed - tweets were NOT posted!');
         return null;
       }
       
-      logger.success(`Thread posted with ${tweets.length} tweets!`);
+      logger.success(`Thread posted with ${trimmedTweets.length} tweets! (Attempt ${attempt}/${maxAttempts})`);
       return { success: true };
 
-    } catch (error) {
-      logger.error('Failed to post thread', { error: error.message });
-      return null;
-    }
+      } catch (error) {
+        logger.error(`Attempt ${attempt} failed: ${error.message}`);
+        if (attempt < maxAttempts) {
+          logger.info(`Waiting ${attempt * 5000}ms before retry...`);
+          await delay(attempt * 5000);
+          await this.page.goto('https://x.com/home', { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await delay(2000);
+          continue; // Retry
+        }
+        logger.error('All attempts failed - tweets were NOT posted!');
+        return null;
+      }
+    } // End of for loop
   }
 
   async close() {
