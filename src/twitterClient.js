@@ -102,7 +102,7 @@ class TwitterClient {
         // Try to go to home
         await this.page.goto('https://twitter.com/home', { 
           waitUntil: 'domcontentloaded', 
-          timeout: 1000000 
+          timeout: 100000 
         });
         await delay(3000);
         
@@ -121,7 +121,7 @@ class TwitterClient {
       logger.info('Opening Twitter login...');
       await this.page.goto('https://twitter.com/login', { 
         waitUntil: 'domcontentloaded', 
-        timeout: 1000000 
+        timeout: 100000 
       });
       
       logger.info('='.repeat(50));
@@ -185,7 +185,7 @@ class TwitterClient {
       // Go to home first to avoid detached frame
       await this.page.goto('https://twitter.com/home', { 
         waitUntil: 'domcontentloaded',
-        timeout: 1000000 
+        timeout: 100000 
       });
       await delay(3000);
       
@@ -253,12 +253,6 @@ class TwitterClient {
       return tweet;
     });
 
-    // Debug: Log tweets to see if line breaks are preserved
-    logger.info('DEBUG: Tweets with line breaks:');
-    trimmedTweets.forEach((t, i) => {
-      logger.info(`Tweet ${i + 1}: ${t.replace(/\n/g, '\\n')}`);
-    });
-
     // Retry mechanism: up to 5 attempts
     const maxAttempts = 5;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -268,7 +262,7 @@ class TwitterClient {
       // Open the dedicated composer and build the entire thread there
       await this.page.goto('https://x.com/compose/post', {
         waitUntil: 'domcontentloaded',
-        timeout: 1000000
+        timeout: 100000
       });
       await delay(6000); // Wait longer for composer to load
 
@@ -359,19 +353,17 @@ class TwitterClient {
         return await this.page.waitForSelector('[data-testid="tweetTextarea"], [contenteditable="true"]', { timeout }).catch(() => null);
       };
 
-      // Type the first tweet with human-like delays - preserve line breaks
+      // Type the first tweet with human-like delays
       const firstArea = await getTextareaForIndex(0, 15000);
       if (!firstArea) {
         logger.error('Cannot find first textarea for thread');
         return null;
       }
-      // Focus the textarea first
-      await firstArea.click();
-      await this.page.focus('[data-testid="tweetTextarea_0"]');
+      await firstArea.click({ delay: Math.floor(Math.random() * 100) });
       await delay(500 + Math.random() * 500);
-      // Type with variable delay - use keyboard to preserve line breaks
-      const typeDelay = () => Math.floor(Math.random() * 30) + 10;
-      await this.page.keyboard.type(trimmedTweets[0], { delay: typeDelay() });
+      // Type with variable delay
+      const typeDelay = () => Math.floor(Math.random() * 50) + 20;
+      await firstArea.type(trimmedTweets[0], { delay: typeDelay() });
       await delay(1000 + Math.random() * 500);
 
       // Robust click helper with retries + scroll + DOM validation
@@ -466,15 +458,14 @@ class TwitterClient {
           return null;
         }
 
-        // Ensure it's focused and visible before typing - use keyboard for line breaks
+        // Ensure it's focused and visible before typing
         try {
           await area.evaluate((node) => node.scrollIntoView({ block: 'center', inline: 'center' }));
         } catch {}
-        await area.click();
-        await this.page.focus(`[data-testid="tweetTextarea_${i}"]`);
+        await area.click({ delay: Math.floor(Math.random() * 100) });
         await delay(200 + Math.random() * 300);
-        const typeDelay = () => Math.floor(Math.random() * 30) + 10;
-        await this.page.keyboard.type(trimmedTweets[i], { delay: typeDelay() });
+        const typeDelay = () => Math.floor(Math.random() * 50) + 20;
+        await area.type(trimmedTweets[i], { delay: typeDelay() });
         await delay(500 + Math.random() * 500);
       }
 
@@ -597,7 +588,7 @@ class TwitterClient {
       const topUrl = `https://twitter.com/search?q=${encodeURIComponent(rawQuery)}&src=typed_query&f=top`;
       await this.page.goto(topUrl, {
         waitUntil: 'domcontentloaded',
-        timeout: 1000000
+        timeout: 100000
       });
 
       await delay(3000);
@@ -698,7 +689,7 @@ class TwitterClient {
     // Handle M (millions)
     if (text.toLowerCase().includes('m')) {
       const num = parseFloat(text.toLowerCase().replace('m', ''));
-      return Math.round(num * 10000000);
+      return Math.round(num * 1000000);
     }
     // Just a number
     return parseInt(text.replace(/[^0-9]/g, '')) || 0;
@@ -713,7 +704,7 @@ class TwitterClient {
       // Navigate to the tweet and allow layout to settle
       await this.page.goto(`https://twitter.com/i/status/${tweetId}`, { 
         waitUntil: 'domcontentloaded',
-        timeout: 1000000 
+        timeout: 100000 
       });
       await delay(3500);
 
@@ -833,4 +824,3 @@ class TwitterClient {
 }
 
 module.exports = new TwitterClient();
-
