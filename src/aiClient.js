@@ -79,13 +79,18 @@ class AIClient {
       const prompt = `You are a crypto Twitter bot for Cookbook DEX, a decentralized exchange on BNB Chain and Base.
 Create a ${numTweets}-tweet thread about: ${topic}
 
+CRITICAL FORMATTING - Each tweet must have PROPER PARAGRAPHS:
+- Use double line breaks (empty line) between paragraphs within the SAME tweet
+- Example: "First paragraph text.\n\nSecond paragraph text.\n\nThird paragraph text."
+- Do NOT write everything in one paragraph or one sentence
+- Each paragraph should be 1-3 sentences max
+
 Style requirements:
 - Keep each tweet UNDER 250 characters (including spaces, emojis, hashtags, all characters)
-- Use line breaks within tweets (like paragraphs)
-- Leave empty line between paragraphs in same tweet
 - Be concise and impactful
 - Make each tweet feel complete and valuable on its own
 - Naturally promote Cookbook DEX without being spammy
+- End each tweet with relevant hashtags
 
 Format the response as a JSON array of tweet strings, like: ["tweet1", "tweet2", "tweet3"]
 Do not include any other text - just the JSON array.`;
@@ -250,8 +255,14 @@ Just return the comment text, nothing else.`;
       const prompt = `You are a crypto Twitter bot for Cookbook DEX, a decentralized exchange on BNB Chain and Base.
 Create a ${numTweets}-tweet thread about: ${topic}
 
+CRITICAL FORMATTING - Each tweet must have PROPER PARAGRAPHS:
+- Use double line breaks (empty line) between paragraphs within the SAME tweet
+- Example: "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
+- Do NOT write everything in one paragraph or one sentence
+- Each paragraph should be 1-3 sentences max
+
 Style requirements:
-- Keep each tweet under 200 characters
+- Keep each tweet UNDER 250 characters
 - Use line breaks within tweets
 - Be concise and impactful
 - Naturally promote Cookbook DEX
@@ -353,7 +364,14 @@ Format the response as a JSON array: ["tweet1", "tweet2", "tweet3"]`;
 
   async generateGeminiThread(topic, numTweets) {
     try {
-      const prompt = `Create a ${numTweets}-tweet thread about: ${topic}. Keep under 200 chars per tweet. Use line breaks. Format: ["tweet1", "tweet2", "tweet3"]`;
+      const prompt = `Create a ${numTweets}-tweet thread about: ${topic}.
+
+CRITICAL FORMATTING - Each tweet must have PROPER PARAGRAPHS:
+- Use double line breaks (empty line) between paragraphs: "First.\n\nSecond.\n\nThird."
+- Do NOT write everything in one sentence
+- Keep each tweet UNDER 250 characters
+
+Format: ["tweet1", "tweet2", "tweet3"]`;
       
       const response = await axios.post(
         `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
