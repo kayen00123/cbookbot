@@ -16,6 +16,26 @@ class AIClient {
     this.isInitialized = false;
   }
 
+  // Ensure consistent paragraph spacing and real newlines
+  sanitizeText(text) {
+    if (!text) return text;
+    // Convert escaped \n to real newlines
+    let t = text.replace(/\\n/g, '\n');
+    // Normalize CRLF/CR to LF
+    t = t.replace(/\r\n?/g, '\n');
+    // Trim spaces on each line
+    t = t
+      .split('\n')
+      .map(l => l.replace(/\s+$/g, '').replace(/^\s+/g, ' '))
+      .join('\n');
+    // Collapse 3+ blank lines to exactly 1 blank line
+    t = t.replace(/\n{3,}/g, '\n\n');
+    // Ensure there is a blank line between paragraphs when there is a sentence break merged
+    // Replace occurrences where a period is followed by a space and a capital without newline when total is long
+    // Keep conservative: do not force extra newlines inside URLs or handles
+    return t.trim();
+  }
+
   async initialize() {
     if (AI_PROVIDER === 'openrouter' && OPENROUTER_API_KEY) {
       this.isInitialized = true;
