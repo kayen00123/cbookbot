@@ -102,7 +102,7 @@ class TwitterClient {
         // Try to go to home
         await this.page.goto('https://twitter.com/home', { 
           waitUntil: 'domcontentloaded', 
-          timeout: 100000000 
+          timeout: 1000000 
         });
         await delay(3000);
         
@@ -121,7 +121,7 @@ class TwitterClient {
       logger.info('Opening Twitter login...');
       await this.page.goto('https://twitter.com/login', { 
         waitUntil: 'domcontentloaded', 
-        timeout: 100000000 
+        timeout: 1000000 
       });
       
       logger.info('='.repeat(50));
@@ -185,7 +185,7 @@ class TwitterClient {
       // Go to home first to avoid detached frame
       await this.page.goto('https://twitter.com/home', { 
         waitUntil: 'domcontentloaded',
-        timeout: 100000000 
+        timeout: 1000000 
       });
       await delay(3000);
       
@@ -268,7 +268,7 @@ class TwitterClient {
       // Open the dedicated composer and build the entire thread there
       await this.page.goto('https://x.com/compose/post', {
         waitUntil: 'domcontentloaded',
-        timeout: 100000000
+        timeout: 1000000
       });
       await delay(6000); // Wait longer for composer to load
 
@@ -597,7 +597,7 @@ class TwitterClient {
       const topUrl = `https://twitter.com/search?q=${encodeURIComponent(rawQuery)}&src=typed_query&f=top`;
       await this.page.goto(topUrl, {
         waitUntil: 'domcontentloaded',
-        timeout: 100000000
+        timeout: 1000000
       });
 
       await delay(3000);
@@ -698,7 +698,7 @@ class TwitterClient {
     // Handle M (millions)
     if (text.toLowerCase().includes('m')) {
       const num = parseFloat(text.toLowerCase().replace('m', ''));
-      return Math.round(num * 1000000000);
+      return Math.round(num * 10000000);
     }
     // Just a number
     return parseInt(text.replace(/[^0-9]/g, '')) || 0;
@@ -713,7 +713,7 @@ class TwitterClient {
       // Navigate to the tweet and allow layout to settle
       await this.page.goto(`https://twitter.com/i/status/${tweetId}`, { 
         waitUntil: 'domcontentloaded',
-        timeout: 100000000 
+        timeout: 1000000 
       });
       await delay(3500);
 
@@ -833,3 +833,4 @@ class TwitterClient {
 }
 
 module.exports = new TwitterClient();
+
