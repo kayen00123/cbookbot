@@ -253,6 +253,12 @@ class TwitterClient {
       return tweet;
     });
 
+    // Debug: Log tweets to see if line breaks are preserved
+    logger.info('DEBUG: Tweets with line breaks:');
+    trimmedTweets.forEach((t, i) => {
+      logger.info(`Tweet ${i + 1}: ${t.replace(/\n/g, '\\n')}`);
+    });
+
     // Retry mechanism: up to 5 attempts
     const maxAttempts = 5;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -353,17 +359,19 @@ class TwitterClient {
         return await this.page.waitForSelector('[data-testid="tweetTextarea"], [contenteditable="true"]', { timeout }).catch(() => null);
       };
 
-      // Type the first tweet with human-like delays
+      // Type the first tweet with human-like delays - preserve line breaks
       const firstArea = await getTextareaForIndex(0, 15000);
       if (!firstArea) {
         logger.error('Cannot find first textarea for thread');
         return null;
       }
-      await firstArea.click({ delay: Math.floor(Math.random() * 100) });
+      // Focus the textarea first
+      await firstArea.click();
+      await this.page.focus('[data-testid="tweetTextarea_0"]');
       await delay(500 + Math.random() * 500);
-      // Type with variable delay
-      const typeDelay = () => Math.floor(Math.random() * 50) + 20;
-      await firstArea.type(trimmedTweets[0], { delay: typeDelay() });
+      // Type with variable delay - use keyboard to preserve line breaks
+      const typeDelay = () => Math.floor(Math.random() * 30) + 10;
+      await this.page.keyboard.type(trimmedTweets[0], { delay: typeDelay() });
       await delay(1000 + Math.random() * 500);
 
       // Robust click helper with retries + scroll + DOM validation
@@ -458,14 +466,15 @@ class TwitterClient {
           return null;
         }
 
-        // Ensure it's focused and visible before typing
+        // Ensure it's focused and visible before typing - use keyboard for line breaks
         try {
           await area.evaluate((node) => node.scrollIntoView({ block: 'center', inline: 'center' }));
         } catch {}
-        await area.click({ delay: Math.floor(Math.random() * 100) });
+        await area.click();
+        await this.page.focus(`[data-testid="tweetTextarea_${i}"]`);
         await delay(200 + Math.random() * 300);
-        const typeDelay = () => Math.floor(Math.random() * 50) + 20;
-        await area.type(trimmedTweets[i], { delay: typeDelay() });
+        const typeDelay = () => Math.floor(Math.random() * 30) + 10;
+        await this.page.keyboard.type(trimmedTweets[i], { delay: typeDelay() });
         await delay(500 + Math.random() * 500);
       }
 
