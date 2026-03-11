@@ -415,7 +415,7 @@ For Token Owners
       // Navigate to account's profile
       await twitterClient.page.goto(`https://twitter.com/${account}`, { 
         waitUntil: 'domcontentloaded',
-        timeout: 30000 
+        timeout: 100000 
       });
       
       await new Promise(resolve => setTimeout(resolve, 4000));
