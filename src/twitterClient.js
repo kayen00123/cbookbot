@@ -182,6 +182,13 @@ class TwitterClient {
     try {
       logger.info('Posting tweet...');
       
+      // Normalize newlines to ensure Twitter preserves paragraph breaks
+      const normalized = String(text)
+        .replace(/\\n/g, '\n')
+        .replace(/\r\n?/g, '\n')
+        .replace(/\n{3,}/g, '\n\n');
+      const parts = normalized.split('\n');
+      
       // Go to home first to avoid detached frame
       await this.page.goto('https://twitter.com/home', { 
         waitUntil: 'domcontentloaded',
@@ -203,7 +210,7 @@ class TwitterClient {
         await delay(4000);
       }
 
-      // Type tweet
+      // Type tweet with explicit Shift+Enter for line breaks
       const textarea = await this.page.$('[data-testid="tweetTextarea_0"], [contenteditable="true"]');
       if (!textarea) {
         logger.error('Cannot find textarea');
@@ -211,7 +218,15 @@ class TwitterClient {
       }
 
       await textarea.click();
-      await textarea.type(text, { delay: 50 });
+      for (let i = 0; i < parts.length; i++) {
+        const segment = parts[i];
+        if (segment) await textarea.type(segment, { delay: 50 });
+        if (i < parts.length - 1) {
+          await this.page.keyboard.down('Shift');
+          await this.page.keyboard.press('Enter');
+          await this.page.keyboard.up('Shift');
+        }
+      }
       await delay(2000);
 
       // If image provided, upload it
