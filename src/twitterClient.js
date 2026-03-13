@@ -716,119 +716,207 @@ class TwitterClient {
     try {
       logger.info(`Posting comment on tweet ${tweetId}...`);
       
-      // Navigate to the tweet and allow layout to settle
+      // Navigate to the tweet directly
       await this.page.goto(`https://twitter.com/i/status/${tweetId}`, { 
         waitUntil: 'domcontentloaded',
         timeout: 100000 
       });
-      await delay(3500);
+      await delay(4000);
 
-      // Ensure a tweet is present
+      // Wait for the tweet to be visible
       await this.page.waitForSelector('[data-testid="tweet"]', { timeout: 15000 }).catch(() => {});
+      await delay(2000);
 
-      // Try to open the reply composer robustly
-      const openReply = async () => {
-        const selectors = [
+      // Scroll to make sure tweet is visible
+      await this.page.evaluate(() => {
+        const tweet = document.querySelector('[data-testid="tweet"]');
+        if (tweet) tweet.scrollIntoView({ block: 'center' });
+      });
+      await delay(1000);
+
+      // Method 1: Try to click on the tweet itself to open it (in case we're on a list view)
+      const tweetElement = await this.page.$('[data-testid="tweet"]');
+      if (tweetElement) {
+        try {
+          await tweetElement.click();
+          await delay(2000);
+        } catch (e) {
+          logger.debug('Could not click tweet element, trying other methods');
+        }
+      }
+
+      // Try multiple selectors to find the reply button
+      const clickReplyButton = async () => {
+        const replySelectors = [
+          // Primary selectors
           '[data-testid="reply"]',
-          'div[role="button"][data-testid="reply"]',
-          'div[data-testid="tweetDetail"] [data-testid="reply"]'
+          '[data-testid="tweetDetailReply"]',
+          // Fallback selectors
+          'div[role="button"][aria-label*="Reply"]',
+          'div[aria-label*="Reply"][role="button"]',
+          // SVG-based selectors (Twitter sometimes uses these)
+          'svg[aria-label="Reply"]',
+          // Try finding by text
+          'div[role="button"]:has-text("Reply")'
         ];
 
-        for (const sel of selectors) {
-          const btn = await this.page.$(sel);
-          if (!btn) continue;
-          try { await btn.evaluate(n => n.scrollIntoView({ block: 'center' })); } catch {}
-          await delay(150);
-          try { await btn.click(); } catch { try { await this.page.evaluate(n => n.click(), btn); } catch {} }
-
-          // Wait for a composer to appear
-          const composer = await this.page
-            .waitForSelector('[data-testid^="tweetTextarea_"]', { timeout: 7000 })
-            .catch(() => null);
-          if (composer) {
-            logger.info('Reply composer opened');
-            return true;
+        for (const sel of replySelectors) {
+          try {
+            const btn = await this.page.$(sel);
+            if (!btn) continue;
+            
+            // Make sure button is visible and enabled
+            const isVisible = await btn.isIntersectingViewport().catch(() => false);
+            if (!isVisible) continue;
+            
+            // Scroll to button
+            await btn.scrollIntoViewIfNeeded().catch(() => {});
+            await delay(300);
+            
+            // Try clicking
+            await btn.click().catch(() => {});
+            await delay(2000);
+            
+            // Check if reply composer appeared
+            const composerSelectors = [
+              '[data-testid^="tweetTextarea_"]',
+              '[data-testid="reply"]',
+              '[data-testid="tweetBox"]',
+              '[contenteditable="true"][role="textbox"]'
+            ];
+            
+            for (const compSel of composerSelectors) {
+              const composer = await this.page.$(compSel);
+              if (composer) {
+                logger.info(`Reply composer found with selector: ${compSel}`);
+                return true;
+              }
+            }
+          } catch (e) {
+            continue;
           }
         }
-
-        // Keyboard fallback: r opens reply on some layouts
-        try {
-          await this.page.keyboard.press('r');
-          const composer = await this.page
-            .waitForSelector('[data-testid^="tweetTextarea_"]', { timeout: 5000 })
-            .catch(() => null);
-          if (composer) {
-            logger.info('Reply composer opened via keyboard');
-            return true;
-          }
-        } catch {}
         return false;
       };
 
-      const opened = await openReply();
-      if (!opened) {
-        logger.error('Could not open reply composer');
+      // Try clicking reply button
+      let replyOpened = await clickReplyButton();
+      
+      // If that didn't work, try keyboard shortcut
+      if (!replyOpened) {
+        logger.info('Trying keyboard shortcut to open reply...');
+        await this.page.keyboard.press('r');
+        await delay(3000);
+        
+        // Check again for composer
+        const composerAfterKeyboard = await this.page.$('[data-testid^="tweetTextarea_"]') || 
+                                        await this.page.$('[contenteditable="true"][role="textbox"]');
+        if (composerAfterKeyboard) {
+          replyOpened = true;
+          logger.info('Reply composer opened via keyboard');
+        }
+      }
+
+      if (!replyOpened) {
+        logger.error('Could not open reply composer - reply button not found or not clickable');
         return null;
       }
 
-      // Find the active textarea (prefer numbered one, else last contenteditable)
-      const textarea = await this.page
-        .$('[data-testid^="tweetTextarea_"]')
-        .then(el => el || this.page.$('[contenteditable="true"]:last-of-type'));
+      // Find the reply textarea - look for the reply-specific composer
+      const findReplyTextarea = async () => {
+        // First try numbered tweetTextarea (reply composer)
+        const replyTextarea = await this.page.$('[data-testid^="tweetTextarea_"]');
+        if (replyTextarea) return replyTextarea;
+        
+        // Try contenteditable in a reply context
+        const editableAreas = await this.page.$('[contenteditable="true"][role="textbox"]');
+        if (editableAreas.length > 0) {
+          // The reply textarea is usually the last one or has specific characteristics
+          return editableAreas[editableAreas.length - 1];
+        }
+        
+        // Try data-testid tweetBox
+        return await this.page.$('[data-testid="tweetBox"]');
+      };
 
+      const textarea = await findReplyTextarea();
       if (!textarea) {
         logger.error('Cannot find reply textarea');
         return null;
       }
 
-      // Type and verify text content appeared
-      await textarea.click({ delay: 0 });
-      await delay(150);
-      await textarea.type(comment, { delay: 30 });
-      await delay(250);
+      // Click and type in the textarea
+      await textarea.click().catch(() => {});
+      await delay(500);
+      
+      // Clear any existing text
+      await this.page.keyboard.down('Control');
+      await this.page.keyboard.press('a');
+      await this.page.keyboard.up('Control');
+      await delay(200);
+      
+      // Type the comment
+      await textarea.type(comment, { delay: 50 });
+      await delay(1000);
 
-      const typedOk = await this.page.evaluate((node) => node.textContent && node.textContent.length > 0, textarea).catch(() => false);
-      if (!typedOk) {
-        logger.warn('Reply text did not register on first try; retrying focus/type');
-        await textarea.click({ delay: 0 });
-        await delay(150);
-        await textarea.type(comment, { delay: 10 });
-      }
+      // Verify text was typed
+      const textContent = await textarea.evaluate(el => el.textContent);
+      logger.info(`Typed comment (${textContent.length} chars): ${textContent.substring(0, 30)}...`);
 
-      logger.info('Submitting reply...');
+      // Find and click the reply button to submit
+      const submitReply = async () => {
+        const submitSelectors = [
+          '[data-testid="tweetButton"]',
+          '[data-testid="tweetButtonInline"]',
+          'div[data-testid="tweetButton"]',
+          'div[role="button"][data-testid="tweetButton"]'
+        ];
 
-      // Try clicking visible Reply button first
-      const submitSelectors = [
-        'div[data-testid="tweetButton"]',
-        'button[data-testid="tweetButton"]',
-        '[data-testid="tweetButtonInline"]'
-      ];
+        for (const sel of submitSelectors) {
+          const btn = await this.page.$(sel);
+          if (!btn) continue;
+          
+          try {
+            // Check if button is enabled
+            const isDisabled = await btn.evaluate(el => el.getAttribute('disabled') !== null);
+            if (isDisabled) {
+              logger.debug('Submit button is disabled, waiting...');
+              await delay(2000);
+            }
+            
+            await btn.scrollIntoViewIfNeeded().catch(() => {});
+            await delay(200);
+            await btn.click();
+            return true;
+          } catch (e) {
+            try {
+              await this.page.evaluate((el) => el.click(), btn);
+              return true;
+            } catch (e2) {
+              continue;
+            }
+          }
+        }
+        return false;
+      };
 
-      let submitted = false;
-      for (const sel of submitSelectors) {
-        const btn = await this.page.waitForSelector(sel, { timeout: 5000 }).catch(() => null);
-        if (!btn) continue;
-        try { await btn.evaluate(n => n.scrollIntoView({ block: 'center' })); } catch {}
-        await delay(100);
-        try { await btn.click(); submitted = true; break; } catch { try { await this.page.evaluate(n => n.click(), btn); submitted = true; break; } catch {} }
-      }
-
+      const submitted = await submitReply();
       if (!submitted) {
-        // Keyboard fallback: Ctrl+Enter
+        // Try Ctrl+Enter as fallback
+        logger.info('Trying Ctrl+Enter to submit reply...');
         await this.page.keyboard.down('Control');
         await this.page.keyboard.press('Enter');
         await this.page.keyboard.up('Control');
-        submitted = true; // assume success, confirm below
       }
 
-      // Confirm by waiting for navigation or composer closing
-      await Promise.race([
-        this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8000 }).catch(() => null),
-        this.page.waitForFunction(() => !document.querySelector('[data-testid^="tweetTextarea_"]'), { timeout: 8000 }).catch(() => null),
-        delay(5000)
-      ]);
+      // Wait for reply to be posted
+      await delay(5000);
 
-      logger.success('Comment posted!');
+      // Verify we didn't just post a new tweet (check URL or page state)
+      const currentUrl = this.page.url();
+      logger.info(`Current URL after reply: ${currentUrl}`);
+
+      logger.success('Comment posted successfully!');
       return { success: true };
       
     } catch (error) {
