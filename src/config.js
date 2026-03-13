@@ -4,7 +4,7 @@ const config = {
   // Bot Settings
   bot: {
     timezone: process.env.TIMEZONE || 'UTC',
-    scheduledTimes: (process.env.SCHEDULED_TIMES || '09:45,14:00,18:12,22:17')
+    scheduledTimes: (process.env.SCHEDULED_TIMES || '19:45,14:00,18:12,22:17')
       .split(',')
       .map(t => t.trim()),
     hashtagTimes: (process.env.HASHTAG_TIME || '12:16,16:38')
