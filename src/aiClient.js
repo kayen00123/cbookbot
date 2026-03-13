@@ -28,8 +28,8 @@ class AIClient {
       .split('\n')
       .map(l => l.replace(/\s+$/g, '').replace(/^\s+/g, ' '))
       .join('\n');
-    // Collapse 3+ blank lines to exactly 1 blank line
-    t = t.replace(/\n{3,}/g, '\n\n');
+    // Collapse 3+ blank lines to exactly 3 blank lines (to preserve at least three line breaks)
+    t = t.replace(/\n{3,}/g, '\n\n\n');
     // Ensure there is a blank line between paragraphs when there is a sentence break merged
     // Replace occurrences where a period is followed by a space and a capital without newline when total is long
     // Keep conservative: do not force extra newlines inside URLs or handles
@@ -96,19 +96,20 @@ class AIClient {
     try {
       logger.info(`OpenRouter: Generating ${numTweets}-tweet thread about: ${topic}`);
 
-      const prompt = `You are a crypto Twitter bot for Cookbook DEX, a decentralized exchange on BNB Chain and Base.
-Create a ${numTweets}-tweet thread about: ${topic}
+       const prompt = `You are a crypto Twitter bot for Cookbook DEX, a decentralized exchange on BNB Chain and Base.
+ Create a ${numTweets}-tweet thread about: ${topic}
 
-Style requirements:
-- Keep each tweet UNDER 250 characters (including spaces, emojis, hashtags, all characters)
-- Use line breaks within tweets (like paragraphs)
-- Leave empty line between paragraphs in same tweet
-- Be concise and impactful
-- Make each tweet feel complete and valuable on its own
-- Naturally promote Cookbook DEX without being spammy
+ Style requirements:
+ - Keep each tweet UNDER 250 characters (including spaces, emojis, all characters)
+ - Use line breaks within tweets (like paragraphs)
+ - Leave empty line between paragraphs in same tweet
+ - Be concise and impactful
+ - Make each tweet feel complete and valuable on its own
+ - Naturally promote Cookbook DEX without being spammy
+ - Do NOT include any hashtags
 
-Format the response as a JSON array of tweet strings, like: ["tweet1", "tweet2", "tweet3"]
-Do not include any other text - just the JSON array.`;
+ Format the response as a JSON array of tweet strings, like: ["tweet1", "tweet2", "tweet3"]
+ Do not include any other text - just the JSON array.`;
 
       const response = await axios.post(
         OPENROUTER_API_URL,
@@ -166,19 +167,20 @@ Do not include any other text - just the JSON array.`;
     }
   }
 
-  async generateOpenRouterSingleTweet(topic) {
-    try {
-      logger.info(`OpenRouter: Generating single tweet about: ${topic}`);
+   async generateOpenRouterSingleTweet(topic) {
+     try {
+       logger.info(`OpenRouter: Generating single tweet about: ${topic}`);
 
-      const prompt = `You are a crypto Twitter bot for Cookbook DEX, a decentralized exchange on BNB Chain and Base.
-Create a short tweet (under 200 characters) about: ${topic}
+       const prompt = `You are a crypto Twitter bot for Cookbook DEX, a decentralized exchange on BNB Chain and Base.
+ Create a short tweet (under 200 characters) about: ${topic}
 
-Style:
-- Use line breaks (like paragraphs)
-- Be concise but impactful
-- Promote Cookbook DEX naturally
+ Style:
+ - Use line breaks (like paragraphs)
+ - Be concise but impactful
+ - Promote Cookbook DEX naturally
+ - Do NOT include any hashtags
 
-Just return the tweet text, nothing else.`;
+ Just return the tweet text, nothing else.`;
 
       const response = await axios.post(
         OPENROUTER_API_URL,
@@ -216,17 +218,18 @@ Just return the tweet text, nothing else.`;
     }
   }
 
-  async generateOpenRouterComment(topic) {
-    try {
-      const prompt = `You are a crypto Twitter bot for Cookbook DEX, a decentralized exchange on BNB Chain and Base.
-Create a short reply comment (under 150 characters) to a ${topic} tweet.
-
-Style:
-- Use line breaks if needed
-- Be concise and natural
-- Promote Cookbook DEX without being spammy
-
-Just return the comment text, nothing else.`;
+   async generateOpenRouterComment(topic) {
+     try {
+       const prompt = `You are a crypto Twitter bot for Cookbook DEX, a decentralized exchange on BNB Chain and Base.
+ Create a short reply comment (under 150 characters) to a ${topic} tweet.
+ 
+ Style:
+ - Use line breaks if needed
+ - Be concise and natural
+ - Promote Cookbook DEX without being spammy
+ - Do NOT include any hashtags
+ 
+ Just return the comment text, nothing else.`;
 
       const response = await axios.post(
         OPENROUTER_API_URL,
@@ -267,16 +270,18 @@ Just return the comment text, nothing else.`;
     try {
       logger.info(`MiniMax: Generating ${numTweets}-tweet thread about: ${topic}`);
 
-      const prompt = `You are a crypto Twitter bot for Cookbook DEX, a decentralized exchange on BNB Chain and Base.
-Create a ${numTweets}-tweet thread about: ${topic}
-
-Style requirements:
-- Keep each tweet under 200 characters
-- Use line breaks within tweets
-- Be concise and impactful
-- Naturally promote Cookbook DEX
-
-Format the response as a JSON array: ["tweet1", "tweet2", "tweet3"]`;
+       const prompt = `You are a crypto Twitter bot for Cookbook DEX, a decentralized exchange on BNB Chain and Base.
+ Create a ${numTweets}-tweet thread about: ${topic}
+ 
+ Style requirements:
+ - Keep each tweet under 200 characters
+ - Use line breaks within tweets (like paragraphs)
+ - Leave empty line between paragraphs in same tweet
+ - Be concise and impactful
+ - Naturally promote Cookbook DEX
+ - Do NOT include any hashtags
+ 
+ Format the response as a JSON array: ["tweet1", "tweet2", "tweet3"]`;
 
       const response = await axios.post(
         MINIMAX_API_URL,
@@ -311,9 +316,18 @@ Format the response as a JSON array: ["tweet1", "tweet2", "tweet3"]`;
     }
   }
 
-  async generateMinimaxSingleTweet(topic) {
-    try {
-      const prompt = `Create a short tweet (under 200 chars) about: ${topic}. Promote Cookbook DEX. Just return tweet.`;
+   async generateMinimaxSingleTweet(topic) {
+     try {
+       const prompt = `You are a crypto Twitter bot for Cookbook DEX, a decentralized exchange on BNB Chain and Base.
+ Create a short tweet (under 200 characters) about: ${topic}
+
+ Style:
+ - Use line breaks (like paragraphs)
+ - Be concise but impactful
+ - Promote Cookbook DEX naturally
+ - Do NOT include any hashtags
+
+ Just return the tweet text, nothing else.`;
       
       const response = await axios.post(
         MINIMAX_API_URL,
@@ -371,36 +385,45 @@ Format the response as a JSON array: ["tweet1", "tweet2", "tweet3"]`;
 
   // ==================== Gemini Implementation ====================
 
-  async generateGeminiThread(topic, numTweets) {
-    try {
-      const prompt = `Create a ${numTweets}-tweet thread about: ${topic}. Keep under 200 chars per tweet. Use line breaks. Format: ["tweet1", "tweet2", "tweet3"]`;
-      
-      const response = await axios.post(
-        `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
-        {
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.9, maxOutputTokens: 2048 }
-        }
-      );
+   async generateGeminiThread(topic, numTweets) {
+     try {
+       const prompt = `Create a ${numTweets}-tweet thread about: ${topic}. Keep under 200 chars per tweet. Use line breaks within tweets (like paragraphs). Leave empty line between paragraphs in same tweet. Be concise and impactful. Make each tweet feel complete and valuable on its own. Naturally promote Cookbook DEX without being spammy. Do NOT include any hashtags. Format: ["tweet1", "tweet2", "tweet3"]`;
+       
+       const response = await axios.post(
+         `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
+         {
+           contents: [{ parts: [{ text: prompt }] }],
+           generationConfig: { temperature: 0.9, maxOutputTokens: 2048 }
+         }
+       );
 
-      if (response.data?.candidates?.[0]) {
-        const text = response.data.candidates[0].content.parts[0].text;
-        try {
-          const jsonMatch = text.match(/\[[\s\S]*\]/);
-          if (jsonMatch) return JSON.parse(jsonMatch[0]);
-        } catch (e) {}
-        return text.split('\n').filter(t => t.trim()).slice(0, numTweets);
-      }
-      return null;
-    } catch (error) {
-      logger.error('Gemini thread failed', { error: error.message });
-      return null;
-    }
-  }
+       if (response.data?.candidates?.[0]) {
+         const text = response.data.candidates[0].content.parts[0].text;
+         try {
+           const jsonMatch = text.match(/\[[\s\S]*\]/);
+           if (jsonMatch) return JSON.parse(jsonMatch[0]);
+         } catch (e) {}
+         return text.split('\n').filter(t => t.trim()).slice(0, numTweets);
+       }
+       return null;
+     } catch (error) {
+       logger.error('Gemini thread failed', { error: error.message });
+       return null;
+     }
+   }
 
-  async generateGeminiSingleTweet(topic) {
-    try {
-      const prompt = `Create a short tweet (under 200 chars) about: ${topic}. Promote Cookbook DEX. Just return tweet.`;
+   async generateGeminiSingleTweet(topic) {
+     try {
+       const prompt = `You are a crypto Twitter bot for Cookbook DEX, a decentralized exchange on BNB Chain and Base.
+ Create a short tweet (under 200 characters) about: ${topic}
+
+ Style:
+ - Use line breaks (like paragraphs)
+ - Be concise but impactful
+ - Promote Cookbook DEX naturally
+ - Do NOT include any hashtags
+
+ Just return the tweet text, nothing else.`;
       
       const response = await axios.post(
         `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
