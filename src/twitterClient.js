@@ -45,6 +45,8 @@ class TwitterClient {
       const hasCookiesEnv = process.env.TWITTER_COOKIES && process.env.TWITTER_COOKIES.length > 0;
       const hasCookies = hasCookiesFile || hasCookiesEnv;
       
+      logger.info(`Cookie sources - File exists: ${hasCookiesFile}, Env exists: ${hasCookiesEnv}`);
+      
       // Detect if running on Linux (fly.io) or Windows
       const isLinux = process.platform === 'linux';
       
@@ -89,13 +91,39 @@ class TwitterClient {
       // Try to load saved cookies
       if (hasCookies) {
         logger.info('Found saved cookies, loading...');
-        let cookies;
-        if (hasCookiesEnv) {
-          // Load from environment variable (base64 encoded)
-          cookies = JSON.parse(Buffer.from(process.env.TWITTER_COOKIES, 'base64').toString('utf8'));
-        } else {
-          // Load from file
-          cookies = JSON.parse(fs.readFileSync(this.cookiesPath, 'utf8'));
+        let cookies = null;
+        
+        // Priority: Try file first, then env var
+        if (hasCookiesFile) {
+          try {
+            let cookieData = fs.readFileSync(this.cookiesPath, 'utf8');
+            // Remove BOM if present
+            if (cookieData.charCodeAt(0) === 0xFEFF) {
+              cookieData = cookieData.slice(1);
+            }
+            cookies = JSON.parse(cookieData);
+            logger.info('Successfully loaded cookies from file');
+          } catch (fileError) {
+            logger.error('Failed to parse cookies file', { error: fileError.message });
+          }
+        }
+        
+        // If file didn't work or doesn't exist, try env var
+        if (!cookies && hasCookiesEnv) {
+          try {
+            const envCookies = process.env.TWITTER_COOKIES;
+            if (!envCookies || envCookies.trim().length === 0) {
+              throw new Error('TWITTER_COOKIES env var is empty');
+            }
+            cookies = JSON.parse(Buffer.from(envCookies.trim(), 'base64').toString('utf8'));
+            logger.info('Successfully loaded cookies from env var');
+          } catch (envError) {
+            logger.error('Failed to parse TWITTER_COOKIES env var', { error: envError.message });
+          }
+        }
+        
+        if (!cookies) {
+          throw new Error('Could not load cookies from any source');
         }
         await this.page.setCookie(...cookies);
         
