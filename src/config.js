@@ -4,13 +4,13 @@ const config = {
   // Bot Settings
   bot: {
     timezone: process.env.TIMEZONE || 'UTC',
-    scheduledTimes: (process.env.SCHEDULED_TIMES || '19:45,19:53,18:12,22:17')
+    scheduledTimes: (process.env.SCHEDULED_TIMES || '20:10,20:40,18:12,22:17')
       .split(',')
       .map(t => t.trim()),
-    hashtagTimes: (process.env.HASHTAG_TIME || '12:16,16:38')
+    hashtagTimes: (process.env.HASHTAG_TIME || '20:20,20:48')
       .split(',')
       .map(t => t.trim()),
-    accountTimes: (process.env.ACCOUNT_TIME || '13:27,20:38')
+    accountTimes: (process.env.ACCOUNT_TIME || '13:27,20:30')
       .split(',')
       .map(t => t.trim()),
     enableRandomMode: process.env.ENABLE_RANDOM_MODE !== 'false',
