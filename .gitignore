@@ -1,9 +1,9 @@
 # Environment variables
 .env
 
-# Twitter session cookies - use TWITTER_COOKIES env var in fly.io
-# Or uncomment below to push cookies file:
-# twitter_cookies.json
+# Twitter session cookies - include this file in your build for local/dev
+# For fly.io: either include this file OR set TWITTER_COOKIES as a base64-encoded secret
+twitter_cookies.json
 
 # Chrome user data - ignore browser cache folders but keep custom json files
 user-data/*/
@@ -42,3 +42,4 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
