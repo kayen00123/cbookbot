@@ -412,16 +412,17 @@ For Token Owners
 
   async getLatestTweetFromAccount(account) {
     try {
-      // Navigate to account's profile
-      await twitterClient.page.goto(`https://twitter.com/${account}`, { 
-        waitUntil: 'domcontentloaded',
-        timeout: 100000 
+      // Navigate to account's profile using x.com direct link
+      await twitterClient.page.goto(`https://x.com/${account}`, { 
+        waitUntil: 'networkidle2',
+        timeout: 60000 
       });
       
-      await new Promise(resolve => setTimeout(resolve, 4000));
+      // Wait for page to be fully ready
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       // Wait for tweets to load
-      await twitterClient.page.waitForSelector('[data-testid="tweet"]', { timeout: 10000 }).catch(() => {});
+      await twitterClient.page.waitForSelector('[data-testid="tweet"]', { timeout: 15000 }).catch(() => {});
       await new Promise(resolve => setTimeout(resolve, 2000));
       
       // Get multiple tweets and detect pinned/reposts from social context
