@@ -4,7 +4,35 @@ const path = require('path');
 const axios = require('axios');
 const logger = require('./logger');
 
+// Wait for page to be fully loaded with network idle
+async function waitForPageReady(page, timeout = 30000) {
+  try {
+    await page.waitForFunction(
+      () => document.readyState === 'complete',
+      { timeout }
+    );
+    // Additional wait for dynamic content
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Wait for specific element with retries
+async function waitForElement(page, selector, timeout = 15000) {
+  try {
+    await page.waitForSelector(selector, { timeout, visible: true });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Exponential backoff helper
+const getBackoffDelay = (attempt) => Math.min(30000, Math.pow(2, attempt) * 1000);
 
 // Download base64 image and save to file
 async function downloadBase64Image(base64Data, filename) {
@@ -128,11 +156,11 @@ class TwitterClient {
         await this.page.setCookie(...cookies);
         
         // Try to go to home
-        await this.page.goto('https://twitter.com/home', { 
-          waitUntil: 'domcontentloaded', 
-          timeout: 100000 
+        await this.page.goto('https://x.com/home', { 
+          waitUntil: 'networkidle2', 
+          timeout: 60000 
         });
-        await delay(3000);
+        await waitForPageReady(this.page, 15000);
         
         // Check if still logged in
         const url = this.page.url();
@@ -147,10 +175,11 @@ class TwitterClient {
 
       // Need to login
       logger.info('Opening Twitter login...');
-      await this.page.goto('https://twitter.com/login', { 
-        waitUntil: 'domcontentloaded', 
-        timeout: 100000 
+      await this.page.goto('https://x.com/login', { 
+        waitUntil: 'networkidle2', 
+        timeout: 60000 
       });
+      await waitForPageReady(this.page, 15000);
       
       logger.info('='.repeat(50));
       logger.info('🔐 Please login manually in the browser');
@@ -217,35 +246,30 @@ class TwitterClient {
         .replace(/\n{3,}/g, '\n\n');
       const parts = normalized.split('\n');
       
-      // Go to home first to avoid detached frame
-      await this.page.goto('https://twitter.com/home', { 
-        waitUntil: 'domcontentloaded',
-        timeout: 100000 
+      // Use direct compose link instead of navigating through home
+      await this.page.goto('https://x.com/compose/post', { 
+        waitUntil: 'networkidle2',
+        timeout: 60000 
       });
-      await delay(3000);
+      await waitForPageReady(this.page, 15000);
       
-      // Click the tweet button
-      const tweetButton = await this.page.$('[data-testid="SideNav_NewTweet_Button"]');
-      if (tweetButton) {
-        await tweetButton.click();
-        await delay(3000);
-      } else {
-        // Fallback to direct URL
-        await this.page.goto('https://twitter.com/compose/tweet', { 
-          waitUntil: 'domcontentloaded',
-          timeout: 30000 
-        });
-        await delay(4000);
+      // Wait for textarea to be ready
+      const textareaReady = await waitForElement(this.page, '[data-testid^="tweetTextarea_"], [contenteditable="true"]', 15000);
+      if (!textareaReady) {
+        logger.error('Tweet textarea not ready');
+        return null;
       }
 
       // Type tweet with explicit Shift+Enter for line breaks
-      const textarea = await this.page.$('[data-testid="tweetTextarea_0"], [contenteditable="true"]');
+      const textarea = await this.page.$('[data-testid^="tweetTextarea_"], [contenteditable="true"]');
       if (!textarea) {
         logger.error('Cannot find textarea');
         return null;
       }
 
       await textarea.click();
+      await delay(500);
+      
       for (let i = 0; i < parts.length; i++) {
         const segment = parts[i];
         if (segment) await textarea.type(segment, { delay: 50 });
@@ -263,10 +287,16 @@ class TwitterClient {
         const imageInput = await this.page.$('input[type="file"]');
         if (imageInput) {
           await imageInput.uploadFile(imagePath);
-          await delay(3000);
+          // Wait for image to be processed
+          await waitForElement(this.page, '[data-testid="tweetImage"]', 10000).catch(() => {});
+          await delay(2000);
           logger.success('Image uploaded!');
         }
       }
+      
+      // Wait for post button to be ready
+      await waitForElement(this.page, '[data-testid="tweetButton"]', 10000);
+      await delay(1000);
       
       // Post with Ctrl+Enter
       logger.info('Sending tweet...');
@@ -274,7 +304,13 @@ class TwitterClient {
       await this.page.keyboard.press('Enter');
       await this.page.keyboard.up('Control');
       
-      await delay(5000);
+      // Wait for navigation away from compose
+      await this.page.waitForFunction(
+        () => !window.location.href.includes('/compose/'),
+        { timeout: 15000 }
+      ).catch(() => {});
+      
+      await delay(3000);
       logger.success('Tweet posted!');
       return { success: true };
       
@@ -296,19 +332,44 @@ class TwitterClient {
       return tweet;
     });
 
-    // Retry mechanism: up to 5 attempts
+    // Retry mechanism: up to 5 attempts with exponential backoff
     const maxAttempts = 5;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         logger.info(`Posting thread with ${trimmedTweets.length} tweets... (Attempt ${attempt}/${maxAttempts})`);
 
-      // Open the dedicated composer and build the entire thread there
-      await this.page.goto('https://x.com/compose/post', {
-        waitUntil: 'domcontentloaded',
-        timeout: 100000
-      });
-      await delay(6000); // Wait longer for composer to load
+        // Open the dedicated composer with better wait conditions
+        await this.page.goto('https://x.com/compose/post', {
+          waitUntil: 'networkidle2',
+          timeout: 60000
+        });
+        
+        // Wait for page to be fully ready
+        await waitForPageReady(this.page, 20000);
+        
+        // Wait for the first textarea to be ready
+        const textareaReady = await waitForElement(this.page, '[data-testid^="tweetTextarea_"], [contenteditable="true"]', 20000);
+        if (!textareaReady) {
+          logger.error('Thread composer not ready, retrying...');
+          if (attempt < maxAttempts) {
+            await delay(getBackoffDelay(attempt));
+            continue;
+          }
+          return null;
+        }
+        
+        logger.info('Composer ready, building thread...');
 
+      // Wait for network to be idle and content to load
+      await this.page.waitForFunction(
+        () => document.readyState === 'complete' && !!document.querySelector('[data-testid^="tweetTextarea_"]'),
+        { timeout: 30000 }
+      ).catch(() => {
+        logger.warn('Timeout waiting for composer, continuing anyway...');
+      });
+      
+      await delay(2000);
+      
       // DEBUG: Log page state
       const composeUrl = this.page.url();
       logger.info(`DEBUG: Current URL after navigate: ${composeUrl}`);
@@ -582,8 +643,9 @@ class TwitterClient {
       if (isStillOnCompose) {
         logger.error(`Attempt ${attempt} failed: Still on compose page - post was blocked`);
         if (attempt < maxAttempts) {
-          logger.info(`Retrying... (Attempt ${attempt + 1}/${maxAttempts})`);
-          await delay(attempt * 5000);
+          const backoffDelay = getBackoffDelay(attempt);
+          logger.info(`Retrying in ${backoffDelay/1000}s... (Attempt ${attempt + 1}/${maxAttempts})`);
+          await delay(backoffDelay);
           continue;
         }
         logger.error('All attempts failed - tweets were NOT posted!');
@@ -597,8 +659,9 @@ class TwitterClient {
       } catch (error) {
         logger.error(`Attempt ${attempt} failed: ${error.message}`);
         if (attempt < maxAttempts) {
-          logger.info(`Retrying... (Attempt ${attempt + 1}/${maxAttempts})`);
-          await delay(attempt * 5000);
+          const backoffDelay = getBackoffDelay(attempt);
+          logger.info(`Retrying in ${backoffDelay/1000}s... (Attempt ${attempt + 1}/${maxAttempts})`);
+          await delay(backoffDelay);
           continue;
         }
         logger.error('All attempts failed - tweets were NOT posted!');
@@ -628,13 +691,14 @@ class TwitterClient {
       const rawQuery = `(#memecoin OR memecoin) ${sinceQuery}`;
 
       // Prefer Top tab to bias toward higher-engagement posts
-      const topUrl = `https://twitter.com/search?q=${encodeURIComponent(rawQuery)}&src=typed_query&f=top`;
+      const topUrl = `https://x.com/search?q=${encodeURIComponent(rawQuery)}&src=typed_query&f=top`;
       await this.page.goto(topUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 100000
+        waitUntil: 'networkidle2',
+        timeout: 60000
       });
-
-      await delay(3000);
+      
+      await waitForPageReady(this.page, 15000);
+      logger.info('Waiting for tweets to load (Top)...');
       logger.info('Waiting for tweets to load (Top)...');
 
       // Helper to scroll and collect a small, fast batch on Top tab only
@@ -744,15 +808,18 @@ class TwitterClient {
     try {
       logger.info(`Posting comment on tweet ${tweetId}...`);
       
-      // Navigate to the tweet directly
-      await this.page.goto(`https://twitter.com/i/status/${tweetId}`, { 
-        waitUntil: 'domcontentloaded',
-        timeout: 100000 
+      // Navigate to the tweet directly using x.com
+      await this.page.goto(`https://x.com/i/status/${tweetId}`, { 
+        waitUntil: 'networkidle2',
+        timeout: 60000 
       });
-      await delay(4000);
+      await waitForPageReady(this.page, 15000);
 
       // Wait for the tweet to be visible
-      await this.page.waitForSelector('[data-testid="tweet"]', { timeout: 15000 }).catch(() => {});
+      const tweetReady = await waitForElement(this.page, '[data-testid="tweet"]', 15000);
+      if (!tweetReady) {
+        logger.warn('Tweet not immediately visible, continuing...');
+      }
       await delay(2000);
 
       // Scroll to make sure tweet is visible
