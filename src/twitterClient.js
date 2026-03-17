@@ -5,14 +5,14 @@ const axios = require('axios');
 const logger = require('./logger');
 
 // Wait for page to be fully loaded with network idle
-async function waitForPageReady(page, timeout = 30000) {
+async function waitForPageReady(page, timeout = 60000) {
   try {
     await page.waitForFunction(
       () => document.readyState === 'complete',
       { timeout }
     );
     // Additional wait for dynamic content
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, 3000));
     return true;
   } catch (e) {
     return false;
@@ -20,7 +20,7 @@ async function waitForPageReady(page, timeout = 30000) {
 }
 
 // Wait for specific element with retries
-async function waitForElement(page, selector, timeout = 15000) {
+async function waitForElement(page, selector, timeout = 30000) {
   try {
     await page.waitForSelector(selector, { timeout, visible: true });
     return true;
@@ -157,10 +157,10 @@ class TwitterClient {
         
         // Try to go to home
         await this.page.goto('https://x.com/home', { 
-          waitUntil: 'networkidle2', 
+          waitUntil: 'domcontentloaded', 
           timeout: 60000 
         });
-        await waitForPageReady(this.page, 15000);
+        await delay(5000);
         
         // Check if still logged in
         const url = this.page.url();
@@ -176,10 +176,10 @@ class TwitterClient {
       // Need to login
       logger.info('Opening Twitter login...');
       await this.page.goto('https://x.com/login', { 
-        waitUntil: 'networkidle2', 
+        waitUntil: 'domcontentloaded', 
         timeout: 60000 
       });
-      await waitForPageReady(this.page, 15000);
+      await delay(5000);
       
       logger.info('='.repeat(50));
       logger.info('🔐 Please login manually in the browser');
@@ -248,13 +248,13 @@ class TwitterClient {
       
       // Use direct compose link instead of navigating through home
       await this.page.goto('https://x.com/compose/post', { 
-        waitUntil: 'networkidle2',
+        waitUntil: 'domcontentloaded',
         timeout: 60000 
       });
-      await waitForPageReady(this.page, 15000);
+      await delay(5000);
       
       // Wait for textarea to be ready
-      const textareaReady = await waitForElement(this.page, '[data-testid^="tweetTextarea_"], [contenteditable="true"]', 15000);
+      const textareaReady = await waitForElement(this.page, '[data-testid^="tweetTextarea_"], [contenteditable="true"]', 30000);
       if (!textareaReady) {
         logger.error('Tweet textarea not ready');
         return null;
@@ -340,15 +340,15 @@ class TwitterClient {
 
         // Open the dedicated composer with better wait conditions
         await this.page.goto('https://x.com/compose/post', {
-          waitUntil: 'networkidle2',
+          waitUntil: 'domcontentloaded',
           timeout: 60000
         });
         
         // Wait for page to be fully ready
-        await waitForPageReady(this.page, 20000);
+        await delay(5000);
         
         // Wait for the first textarea to be ready
-        const textareaReady = await waitForElement(this.page, '[data-testid^="tweetTextarea_"], [contenteditable="true"]', 20000);
+        const textareaReady = await waitForElement(this.page, '[data-testid^="tweetTextarea_"], [contenteditable="true"]', 60000);
         if (!textareaReady) {
           logger.error('Thread composer not ready, retrying...');
           if (attempt < maxAttempts) {
@@ -363,12 +363,12 @@ class TwitterClient {
       // Wait for network to be idle and content to load
       await this.page.waitForFunction(
         () => document.readyState === 'complete' && !!document.querySelector('[data-testid^="tweetTextarea_"]'),
-        { timeout: 30000 }
+        { timeout: 60000 }
       ).catch(() => {
         logger.warn('Timeout waiting for composer, continuing anyway...');
       });
       
-      await delay(2000);
+      await delay(3000);
       
       // DEBUG: Log page state
       const composeUrl = this.page.url();
@@ -693,11 +693,11 @@ class TwitterClient {
       // Prefer Top tab to bias toward higher-engagement posts
       const topUrl = `https://x.com/search?q=${encodeURIComponent(rawQuery)}&src=typed_query&f=top`;
       await this.page.goto(topUrl, {
-        waitUntil: 'networkidle2',
-        timeout: 60000
+        waitUntil: 'networkidle0',
+        timeout: 120000
       });
       
-      await waitForPageReady(this.page, 15000);
+      await waitForPageReady(this.page, 30000);
       logger.info('Waiting for tweets to load (Top)...');
       logger.info('Waiting for tweets to load (Top)...');
 
@@ -810,17 +810,17 @@ class TwitterClient {
       
       // Navigate to the tweet directly using x.com
       await this.page.goto(`https://x.com/i/status/${tweetId}`, { 
-        waitUntil: 'networkidle2',
-        timeout: 60000 
+        waitUntil: 'networkidle0',
+        timeout: 120000 
       });
-      await waitForPageReady(this.page, 15000);
+      await waitForPageReady(this.page, 30000);
 
       // Wait for the tweet to be visible
-      const tweetReady = await waitForElement(this.page, '[data-testid="tweet"]', 15000);
+      const tweetReady = await waitForElement(this.page, '[data-testid="tweet"]', 30000);
       if (!tweetReady) {
         logger.warn('Tweet not immediately visible, continuing...');
       }
-      await delay(2000);
+      await delay(3000);
 
       // Scroll to make sure tweet is visible
       await this.page.evaluate(() => {
@@ -1005,11 +1005,30 @@ class TwitterClient {
       }
 
       // Wait for reply to be posted
-      await delay(5000);
+      await delay(8000);
 
       // Verify we didn't just post a new tweet (check URL or page state)
       const currentUrl = this.page.url();
       logger.info(`Current URL after reply: ${currentUrl}`);
+      
+      // Check if we're still on compose page - that means reply failed
+      const isStillOnCompose = currentUrl.includes('/compose/');
+      
+      if (isStillOnCompose) {
+        logger.error('Reply may have failed - still on compose page');
+        // Try one more time to find the submit button
+        const submitBtn = await this.page.$('[data-testid="tweetButton"]');
+        if (submitBtn) {
+          await submitBtn.click();
+          await delay(5000);
+          const newUrl = this.page.url();
+          if (!newUrl.includes('/compose/')) {
+            logger.success('Comment posted successfully on second try!');
+            return { success: true };
+          }
+        }
+        return null;
+      }
 
       logger.success('Comment posted successfully!');
       return { success: true };
